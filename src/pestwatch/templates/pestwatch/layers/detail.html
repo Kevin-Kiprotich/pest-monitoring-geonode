@@ -1,0 +1,63 @@
+{% extends "pestwatch/base_portal.html" %}
+
+{% block page_title %}{{ layer }}{% endblock %}
+
+{% block portal_content %}
+{% include "pestwatch/layers/_tabs.html" %}
+
+<div class="pw-detail">
+  <div class="pw-detail-header">
+    <div>
+      <h2>{{ layer }}</h2>
+      <span class="pw-status pw-status-{{ layer.status }}">{{ layer.get_status_display }}</span>
+      <span class="pw-subtle">{{ layer.is_published|yesno:"Shown on the dashboard,Hidden from the dashboard" }}</span>
+    </div>
+    <div class="pw-page-actions">
+      {% if layer.dataset %}<a class="btn btn-default" href="{{ layer.dataset.detail_url }}"><i class="fa fa-external-link"></i> GeoNode page</a>{% endif %}
+      {% if perms.pestwatch.change_pestlayer %}
+        {% if layer.status == 'ready' %}
+        <form method="post" action="{% url 'pestwatch:layer_recompute' layer.pk %}" class="pw-inline-form">
+          {% csrf_token %}<button class="btn btn-default" type="submit"><i class="fa fa-refresh"></i> Recompute statistics</button>
+        </form>
+        {% endif %}
+        <a class="btn btn-default" href="{% url 'pestwatch:layer_edit' layer.pk %}">Edit</a>
+      {% endif %}
+      {% if perms.pestwatch.delete_pestlayer %}<a class="btn btn-danger" href="{% url 'pestwatch:layer_delete' layer.pk %}">Delete</a>{% endif %}
+    </div>
+  </div>
+
+  {% if layer.status == 'failed' %}<div class="alert alert-danger"><strong>Publishing failed.</strong> {{ layer.status_message }}</div>{% endif %}
+
+  <dl class="dl-horizontal pw-dl">
+    <dt>Pest</dt><dd>{{ layer.pest }}</dd>
+    <dt>Product</dt><dd>{{ layer.get_product_type_display }}</dd>
+    <dt>County</dt><dd>{{ layer.county }}</dd>
+    <dt>Period</dt><dd>{{ layer.valid_from|date:"j M Y"|default:"—" }}{% if layer.valid_to %} – {{ layer.valid_to|date:"j M Y" }}{% endif %}</dd>
+    <dt>Style</dt><dd>{{ layer.style }} <code>{{ layer.style.name }}</code></dd>
+    <dt>GeoServer layer</dt><dd>{% if layer.dataset %}<code>{{ layer.dataset.alternate }}</code>{% else %}—{% endif %}</dd>
+    <dt>Source file</dt><dd>{{ layer.source_filename }} ({{ layer.file_size|filesizeformat }})</dd>
+    <dt>Uploaded</dt><dd>{{ layer.created_at }} by {{ layer.uploaded_by|default:"—" }}</dd>
+    {% if layer.description %}<dt>Description</dt><dd>{{ layer.description|linebreaksbr }}</dd>{% endif %}
+  </dl>
+
+  <h3>Zonal statistics</h3>
+  {% if stats %}
+  <div class="table-responsive">
+  <table class="table table-condensed pw-table">
+    <thead><tr><th>Level</th><th>Name</th><th>Parent</th><th class="text-right">Mean</th><th class="text-right">Min</th><th class="text-right">Max</th><th class="text-right">Valid pixels</th></tr></thead>
+    <tbody>
+    {% for s in stats %}
+      <tr>
+        <td>{{ s.boundary.get_level_display }}</td><td>{{ s.boundary.name }}</td><td>{{ s.boundary.parent|default:"" }}</td>
+        <td class="text-right">{{ s.mean|floatformat:3 }}</td><td class="text-right">{{ s.minimum|floatformat:3 }}</td>
+        <td class="text-right">{{ s.maximum|floatformat:3 }}</td><td class="text-right">{{ s.valid_count }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="text-muted">No statistics yet.{% if layer.status == 'ready' %} Import constituencies and wards for {{ layer.county }} to compute them.{% endif %}</p>
+  {% endif %}
+</div>
+{% endblock %}

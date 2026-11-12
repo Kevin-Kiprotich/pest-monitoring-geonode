@@ -1,0 +1,35 @@
+{% extends "pestwatch/base_portal.html" %}
+
+{% block page_title %}Edit {{ layer }}{% endblock %}
+
+{% block portal_content %}
+{% include "pestwatch/layers/_tabs.html" %}
+
+<div class="pw-form-page">
+  <h2>Edit {{ layer }}</h2>
+  <p class="text-muted">
+    {{ layer.get_product_type_display }} raster · {{ layer.source_filename }}.
+    To replace the raster itself, delete this layer and upload the new file.
+  </p>
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+    <div class="row">
+      <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.pest %}</div>
+      <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.county %}</div>
+      <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.style %}</div>
+    </div>
+    <div class="row">
+      <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.valid_from %}</div>
+      <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.valid_to %}</div>
+    </div>
+    {% include "pestwatch/_field.html" with field=form.title %}
+    {% include "pestwatch/_field.html" with field=form.description %}
+    {% include "pestwatch/_field.html" with field=form.is_published %}
+    <div class="pw-form-actions">
+      <button type="submit" class="btn btn-primary">Save</button>
+      <a class="btn btn-default" href="{% url 'pestwatch:layer_list' %}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

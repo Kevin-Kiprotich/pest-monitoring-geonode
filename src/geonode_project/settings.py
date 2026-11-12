@@ -48,9 +48,15 @@ WSGI_APPLICATION = "{}.wsgi.application".format(PROJECT_NAME)
 # Language code for this installation. All choices can be found here:
 # http://www.i18nguy.com/unicode/language-identifiers.html
 LANGUAGE_CODE = os.getenv("LANGUAGE_CODE", "en")
-
+# Custom applications for this project
 if PROJECT_NAME not in INSTALLED_APPS:
     INSTALLED_APPS += (PROJECT_NAME,)
+
+# Custom applications for this project
+CUSTOM_APPS = ["pestwatch"]
+for app in CUSTOM_APPS:
+    if app and app not in INSTALLED_APPS:
+        INSTALLED_APPS += (app,)
 
 # Location of url mappings
 ROOT_URLCONF = os.getenv("ROOT_URLCONF", "{}.urls".format(PROJECT_NAME))

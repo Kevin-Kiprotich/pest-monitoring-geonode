@@ -1,0 +1,21 @@
+<div class="pw-page-header">
+  <h1>Layers</h1>
+  <div class="pw-page-actions">
+    {% if tab == 'rasters' and perms.pestwatch.add_pestlayer %}
+      <a class="btn btn-primary" href="{% url 'pestwatch:layer_upload' %}"><i class="fa fa-upload"></i> Upload raster</a>
+    {% elif tab == 'boundaries' and perms.pestwatch.add_boundarysource %}
+      <a class="btn btn-primary" href="{% url 'pestwatch:boundary_import' %}"><i class="fa fa-download"></i> Import boundaries</a>
+    {% elif tab == 'styles' and perms.pestwatch.add_peststyle %}
+      <a class="btn btn-primary" href="{% url 'pestwatch:style_create' %}"><i class="fa fa-plus"></i> New style</a>
+    {% endif %}
+  </div>
+</div>
+<ul class="nav nav-tabs pw-tabs">
+  <li class="{% if tab == 'rasters' %}active{% endif %}"><a href="{% url 'pestwatch:layer_list' %}">Rasters</a></li>
+  {% if perms.pestwatch.view_boundarysource %}
+  <li class="{% if tab == 'boundaries' %}active{% endif %}"><a href="{% url 'pestwatch:boundary_list' %}">Boundaries</a></li>
+  {% endif %}
+  {% if perms.pestwatch.view_peststyle %}
+  <li class="{% if tab == 'styles' %}active{% endif %}"><a href="{% url 'pestwatch:style_list' %}">Styles</a></li>
+  {% endif %}
+</ul>

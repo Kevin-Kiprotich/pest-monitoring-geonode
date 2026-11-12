@@ -1,0 +1,98 @@
+{% extends "pestwatch/base_portal.html" %}
+{% load humanize pestwatch_tags %}
+
+{% block page_title %}Processes{% endblock %}
+
+{% block portal_content %}
+<div class="pw-page-header">
+  <h1>Processes</h1>
+  <div class="pw-page-actions">
+    {% if perms.pestwatch.add_pipelinerun %}<a class="btn btn-primary" href="{% url 'pestwatch:process_start' %}"><i class="fa fa-play"></i> Start a run</a>{% endif %}
+  </div>
+</div>
+<p class="text-muted pw-lead">The system downloads the weather, runs the models and publishes the maps on its own.
+  This page shows what it did, what it is waiting for, and lets you re-run a failed run or start one for a chosen period.
+  <a href="{% url 'pestwatch:about' %}#managers">How the runs work</a>.</p>
+
+{% if worker_stale %}
+<div class="alert alert-warning"><i class="fa fa-exclamation-triangle"></i>
+  The model worker has not checked in {% if worker_seen %}since {{ worker_seen|naturaltime }}{% else %}yet{% endif %}.
+  Automatic runs only happen while the <code>pestmodels</code> container is running.</div>
+{% endif %}
+{% if not credentials.gee or not credentials.cds or not model_counties %}
+<div class="alert alert-info">
+  <strong>Setup still needed:</strong>
+  <ul class="pw-compact-list">
+    {% if not credentials.gee %}<li>Google Earth Engine: set <code>PESTWATCH_GEE_KEY_FILE</code> (service-account JSON) and <code>PESTWATCH_GEE_PROJECT</code> in <code>.env</code>.</li>{% endif %}
+    {% if not credentials.cds %}<li>Copernicus CDS: set <code>CDS_API_KEY</code> in <code>.env</code> and accept the dataset licences (see How it works).</li>{% endif %}
+    {% if not model_counties %}<li>No county has pest models yet: upload them under <a href="{% url 'pestwatch:input_list' %}">Input data</a>.</li>{% endif %}
+  </ul>
+</div>
+{% endif %}
+
+<div class="pw-schedule-grid">
+  {% for s in schedules %}
+  <div class="pw-card pw-schedule">
+    <div class="pw-card-head">
+      <h3>{{ s.schedule.get_pipeline_display }}</h3>
+      {% if perms.pestwatch.change_pipelinerun %}
+      <form method="post" action="{% url 'pestwatch:schedule_toggle' s.schedule.pipeline %}" class="pw-inline-form">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-xs {% if s.schedule.enabled %}btn-success{% else %}btn-default{% endif %}"
+                title="{% if s.schedule.enabled %}Automatic runs are on; click to pause them{% else %}Paused; click to turn automatic runs on{% endif %}">
+          {% if s.schedule.enabled %}<i class="fa fa-clock-o"></i> Automatic{% else %}<i class="fa fa-pause"></i> Paused{% endif %}
+        </button>
+      </form>
+      {% endif %}
+    </div>
+    <div class="pw-subtle">{{ s.when }}{% if s.schedule.enabled %} · next {{ s.next|naturaltime }}{% endif %}</div>
+    <div class="pw-schedule-last">
+      {% if s.last %}Last run: <a href="{% url 'pestwatch:process_detail' s.last.pk %}">#{{ s.last.pk }}</a>
+        <span class="pw-run-status pw-run-{{ s.last.status }}">{{ s.last.get_status_display }}</span> {{ s.last.created_at|naturaltime }}
+      {% else %}Never run yet{% endif %}
+      {% if s.last_ok and s.last_ok != s.last %}<div class="pw-subtle">Last success {{ s.last_ok.finished_at|naturaltime }}</div>{% endif %}
+    </div>
+    {% if s.schedule.waiting_message %}<div class="pw-waiting"><i class="fa fa-hourglass-half"></i> {{ s.schedule.waiting_message }}</div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<div class="pw-section-head">
+  <h3>Runs</h3>
+  <form class="form-inline" method="get">
+    <select name="pipeline" class="form-control input-sm" onchange="this.form.submit()" aria-label="Pipeline">
+      <option value="">All pipelines</option>
+      {% for s in schedules %}<option value="{{ s.schedule.pipeline }}" {% if pipeline == s.schedule.pipeline %}selected{% endif %}>{{ s.schedule.get_pipeline_display }}</option>{% endfor %}
+      <option value="training" {% if pipeline == 'training' %}selected{% endif %}>Pest model training</option>
+    </select>
+  </form>
+</div>
+{% if runs %}
+<div class="table-responsive">
+<table class="table table-hover pw-table">
+  <thead><tr><th>Run</th><th>Period</th><th>Status</th><th>Progress</th><th>Started</th><th>Duration</th><th class="text-right">Layers</th></tr></thead>
+  <tbody>
+  {% for run in runs %}
+    <tr>
+      <td><a href="{% url 'pestwatch:process_detail' run.pk %}"><strong>{{ run.get_pipeline_display }} #{{ run.pk }}</strong></a>
+        <div class="pw-subtle">{{ run.get_trigger_display }}{% if run.created_by %} by {{ run.created_by }}{% endif %}{% if run.attempts > 1 %} · attempt {{ run.attempts }}{% endif %}</div></td>
+      <td>{{ run.period_label }}<div class="pw-subtle">{{ run.params.counties|join:", "|default:"no counties" }}</div></td>
+      <td><span class="pw-run-status pw-run-{{ run.status }}">{{ run.get_status_display }}</span>
+        {% if run.message %}<div class="{% if run.status == 'failed' %}pw-error-text{% else %}pw-subtle{% endif %}">{{ run.message|truncatechars:160 }}</div>{% endif %}</td>
+      <td><div class="pw-steps-mini">{% for st in run.steps.all %}<span class="pw-step-dot pw-step-{{ st.status }}" title="{{ st.name }}: {{ st.get_status_display }}"></span>{% endfor %}</div></td>
+      <td>{% if run.started_at %}<span title="{{ run.started_at }}">{{ run.started_at|naturaltime }}</span>{% else %}<span class="pw-subtle">queued {{ run.created_at|naturaltime }}</span>{% endif %}</td>
+      <td>{% if run.duration %}{{ run.duration|duration }}{% elif run.status == 'running' %}<span class="pw-subtle">running</span>{% else %}—{% endif %}</td>
+      <td class="text-right">{{ run.layers_published|default:"—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<div class="pw-empty-state"><p>No runs yet. They appear here as soon as the worker starts one, or when you start one.</p></div>
+{% endif %}
+{% endblock %}
+
+{% block portal_script %}
+{% if active_ids %}<script>setTimeout(function () { window.location.reload(); }, 30000);</script>{% endif %}
+{% endblock %}

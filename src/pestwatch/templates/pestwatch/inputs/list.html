@@ -1,0 +1,67 @@
+{% extends "pestwatch/base_portal.html" %}
+{% load humanize %}
+
+{% block page_title %}Input data{% endblock %}
+
+{% block portal_content %}
+<div class="pw-page-header">
+  <h1>Input data</h1>
+  {% if counties %}
+  <form class="form-inline" method="get">
+    <label for="pw-input-county" class="pw-subtle">County</label>
+    <select id="pw-input-county" name="county" class="form-control" onchange="this.form.submit()">
+      {% for c in counties %}<option value="{{ c.pk }}" {% if c == county %}selected{% endif %}>{{ c.name }}{% if c.name not in with_models %} (no models){% endif %}</option>{% endfor %}
+    </select>
+  </form>
+  {% endif %}
+</div>
+<p class="text-muted pw-lead">The weather and the seasonal forecast are downloaded automatically. The datasets below are not:
+  no script in the model package produces them, so a manager uploads them here. Each file is checked and stored where the
+  models read it. Larger archives (e.g. years of past composites) can also be copied into <code>{{ data_root }}/data</code>
+  on the server in the same folder layout.</p>
+
+{% if not county %}
+<div class="pw-empty-state"><p>No counties yet. Import the boundaries first (Layers &gt; Boundaries).</p></div>
+{% else %}
+{% for g in groups %}
+<h3>{{ g.title }}</h3>
+<div class="table-responsive">
+<table class="table pw-table pw-input-table">
+  <thead><tr><th>Dataset</th><th>Used by</th><th>Needed for</th><th>{{ county.name }}</th><th class="text-right"></th></tr></thead>
+  <tbody>
+  {% for r in g.rows %}
+    <tr>
+      <td><strong>{{ r.ds.label }}</strong><div class="pw-subtle">{{ r.ds.notes }}</div></td>
+      <td class="pw-subtle">{{ r.ds.used_by }}</td>
+      <td class="pw-subtle">{{ r.ds.needed_for }}</td>
+      <td>
+        <span class="pw-status {% if r.ok %}pw-status-ready{% elif r.detail == 'missing' or r.detail == 'none' %}pw-status-failed{% else %}pw-status-pending{% endif %}">
+          {% if r.ok %}{% if r.ds.monthly %}Up to date{% else %}Present{% endif %}{% elif r.detail == 'missing' or r.detail == 'none' %}Missing{% else %}Behind{% endif %}</span>
+        <div class="pw-subtle">{{ r.detail }}</div>
+        {% if r.gaps %}<div class="pw-subtle" title="{{ r.gaps|join:', ' }}">Missing: {{ r.gaps|slice:":6"|join:", " }}{% if r.gaps|length > 6 %} …{% endif %}</div>{% endif %}
+      </td>
+      <td class="text-right">{% if perms.pestwatch.add_inputupload %}<a class="btn btn-xs btn-default" href="{% url 'pestwatch:input_upload' r.ds.key %}?county={{ county.pk }}"><i class="fa fa-upload"></i> Upload</a>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endfor %}
+{% endif %}
+
+<h3>Recent uploads</h3>
+{% if uploads %}
+<div class="table-responsive">
+<table class="table pw-table">
+  <thead><tr><th>Dataset</th><th>County</th><th>Month</th><th>File</th><th>By</th><th>When</th></tr></thead>
+  <tbody>
+  {% for u in uploads %}
+    <tr><td>{{ u.dataset }}</td><td>{{ u.county|default:"—" }}</td><td>{{ u.month|default:"—" }}</td>
+      <td>{{ u.filename }} <span class="pw-subtle">{{ u.size|filesizeformat }}{% if u.files_written > 1 %} · {{ u.files_written }} files{% endif %}</span></td>
+      <td>{{ u.uploaded_by|default:"" }}</td><td>{{ u.created_at|naturaltime }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}<p class="text-muted">Nothing uploaded yet.</p>{% endif %}
+{% endblock %}

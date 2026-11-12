@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{% block page_title %}PestWatch{% endblock %} - {{ block.super }}{% endblock %}
+
+{% block body_extra_class %}{{ block.super }} pw-app{% endblock %}
+
+{% block extra_head %}
+  {{ block.super }}
+  <link rel="stylesheet" href="{% static 'pestwatch/styles/pestwatch.css' %}">
+  {% block portal_head %}{% endblock %}
+{% endblock %}
+
+{% block middle %}
+<div class="pw-portal" id="pw-portal">
+  <nav class="pw-sidenav" id="pw-sidenav" aria-label="PestWatch">
+    <button type="button" class="pw-sidenav-toggle" id="pw-sidenav-toggle" title="Collapse menu" aria-expanded="true">
+      <i class="fa fa-angle-double-left" aria-hidden="true"></i>
+    </button>
+    <div class="pw-brand">
+      <i class="fa fa-bug" aria-hidden="true"></i><span class="pw-label">PestWatch</span>
+    </div>
+    <ul class="pw-nav">
+      <li><a href="{% url 'pestwatch:index' %}" class="{% if section == 'nowcast' %}active{% endif %}" title="Nowcast: current risk">
+        <i class="fa fa-map" aria-hidden="true"></i><span class="pw-label">Nowcast</span></a></li>
+      <li><a href="{% url 'pestwatch:forecast' %}" class="{% if section == 'forecast' %}active{% endif %}" title="Forecast: the coming months">
+        <i class="fa fa-line-chart" aria-hidden="true"></i><span class="pw-label">Forecast</span></a></li>
+      <li><a href="{% url 'pestwatch:about' %}" class="{% if section == 'about' %}active{% endif %}" title="How it works">
+        <i class="fa fa-question-circle" aria-hidden="true"></i><span class="pw-label">How it works</span></a></li>
+      {% if can_manage or can_processes or can_inputs %}<li class="pw-nav-divider" aria-hidden="true"></li>{% endif %}
+      {% if can_manage %}
+      <li><a href="{% url 'pestwatch:layer_list' %}" class="{% if section == 'layers' %}active{% endif %}" title="Layers">
+        <i class="fa fa-clone" aria-hidden="true"></i><span class="pw-label">Layers</span></a></li>
+      {% endif %}
+      {% if can_processes %}
+      <li><a href="{% url 'pestwatch:process_list' %}" class="{% if section == 'processes' %}active{% endif %}" title="Model runs">
+        <i class="fa fa-cogs" aria-hidden="true"></i><span class="pw-label">Processes</span></a></li>
+      {% endif %}
+      {% if can_inputs %}
+      <li><a href="{% url 'pestwatch:input_list' %}" class="{% if section == 'inputs' %}active{% endif %}" title="Input data for the models">
+        <i class="fa fa-database" aria-hidden="true"></i><span class="pw-label">Input data</span></a></li>
+      {% endif %}
+    </ul>
+  </nav>
+  <main class="pw-main {% block main_class %}pw-main-page{% endblock %}">
+    {% block portal_messages %}
+      {% if messages %}
+      <div class="pw-messages">
+        {% for message in messages %}
+        <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %} alert-dismissible" role="alert">
+          <button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+          {{ message }}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    {% endblock %}
+    {% block portal_content %}{% endblock %}
+  </main>
+</div>
+{% endblock %}
+
+{% block extra_script %}
+  {{ block.super }}
+  <script src="{% static 'pestwatch/js/portal.js' %}"></script>
+  {% block portal_script %}{% endblock %}
+{% endblock %}

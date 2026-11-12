@@ -22,6 +22,7 @@
 # the custom error page handler for the GeoNode project
 # related issue: https://github.com/GeoNode/geonode-project/issues/570
 from geonode.urls import urlpatterns, handler500  # noqa
+from django.urls import path, include
 
 """
 # You can register your own urlpatterns here
@@ -31,3 +32,7 @@ urlpatterns = [
         name='home'),
  ] + urlpatterns
 """
+
+urlpatterns += [
+    path('pestwatch/', include('pestwatch.urls', namespace='pestwatch')),
+]

@@ -1,0 +1,33 @@
+{% extends "pestwatch/base_portal.html" %}
+
+{% block page_title %}Styles{% endblock %}
+
+{% block portal_content %}
+{% include "pestwatch/layers/_tabs.html" %}
+
+<p class="text-muted">Shared SLD styles. Every raster of a product type can use the same style; editing a style restyles all of them.</p>
+{% if styles %}
+<div class="table-responsive">
+<table class="table table-hover pw-table">
+  <thead><tr><th>Style</th><th>GeoServer name</th><th>Product</th><th class="text-right">Rasters</th><th>Updated</th><th class="text-right">Actions</th></tr></thead>
+  <tbody>
+  {% for s in styles %}
+    <tr>
+      <td><strong>{{ s.title }}</strong></td>
+      <td><code>{{ s.name }}</code></td>
+      <td>{{ s.get_product_type_display }}</td>
+      <td class="text-right">{{ s.n }}</td>
+      <td>{{ s.updated_at|date:"j M Y" }}</td>
+      <td class="text-right pw-actions">
+        {% if perms.pestwatch.change_peststyle %}<a class="btn btn-xs btn-default" href="{% url 'pestwatch:style_edit' s.pk %}">Edit</a>{% endif %}
+        {% if perms.pestwatch.delete_peststyle %}<a class="btn btn-xs btn-danger {% if s.n %}disabled{% endif %}" href="{% url 'pestwatch:style_delete' s.pk %}" {% if s.n %}title="Used by rasters" aria-disabled="true"{% endif %}>Delete</a>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="text-muted">No styles yet.</p>
+{% endif %}
+{% endblock %}

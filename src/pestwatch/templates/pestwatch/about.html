@@ -1,0 +1,171 @@
+{% extends "pestwatch/base_portal.html" %}
+
+{% block page_title %}How it works{% endblock %}
+
+{% block portal_content %}
+<div class="pw-doc">
+  <nav class="pw-doc-toc" aria-label="On this page">
+    <strong>On this page</strong>
+    <ol>
+      <li><a href="#maps">The two maps</a></li>
+      <li><a href="#nowcast-forecast">Nowcast and forecast</a></li>
+      <li><a href="#how">How a map is made</a></li>
+      <li><a href="#data">Data sources</a></li>
+      <li><a href="#reading">Reading the maps</a></li>
+      <li><a href="#updates">When maps are updated</a></li>
+      <li><a href="#limits">Limits</a></li>
+      {% if can_processes or can_inputs %}<li><a href="#managers">For managers</a></li>{% endif %}
+    </ol>
+  </nav>
+
+  <article class="pw-doc-body">
+    <h1>How PestWatch works</h1>
+    <p class="pw-lead">PestWatch maps where conditions favour crop pests and diseases in each county: fall armyworm,
+      aphids, thrips, stem borer, African armyworm and maize lethal necrosis disease (MLND). The maps are produced
+      automatically by models that combine weather, satellite and terrain data with field records of where each pest
+      has been found.</p>
+
+    <h2 id="maps">The two maps</h2>
+    <p>Every pest, county and date has two versions of the same result:</p>
+    <div class="pw-doc-cards">
+      <div class="pw-card">
+        <h3>Hybrid risk (0 to 1)</h3>
+        <p>A continuous score for every 30 m cell. 0 means conditions are among the least favourable in the county,
+          1 among the most favourable. It blends two models: 80 % a statistical model learned from field records, 20 %
+          a temperature model built from the pest's known development thresholds.</p>
+        <div class="pw-ramp" aria-hidden="true"></div>
+        <div class="pw-ramp-labels"><span>0 · low</span><span>0.5</span><span>1 · high</span></div>
+      </div>
+      <div class="pw-card">
+        <h3>Risk class (1 to 5)</h3>
+        <p>The same score grouped into five classes, easier to read and to summarise by ward. The class limits are set
+          from the scores at known infestations, so "Very high" means conditions like those at most recorded outbreaks.</p>
+        <ul class="pw-legend-list">
+          {% for c in classes %}<li><span class="pw-swatch" style="background:{{ c.color }}"></span>{{ c.value }} · {{ c.label }}</li>{% endfor %}
+        </ul>
+        <p class="pw-subtle">Areas outside the county, or without data, are left blank.</p>
+      </div>
+    </div>
+    <p>Switch between them with <em>Hybrid</em> and <em>Classified</em> above the map. The panel on the right summarises
+      the map for the county and for each constituency or ward; <em>Shade units</em> colours each unit by its average.</p>
+
+    <h2 id="nowcast-forecast">Nowcast and forecast</h2>
+    <div class="table-responsive">
+    <table class="table pw-table">
+      <thead><tr><th></th><th><a href="{% url 'pestwatch:index' %}">Nowcast</a></th><th><a href="{% url 'pestwatch:forecast' %}">Forecast</a></th></tr></thead>
+      <tbody>
+        <tr><th>Answers</th><td>Where are conditions favourable <strong>now</strong>?</td><td>Where will they be favourable in the <strong>coming {{ forecast_months }} months</strong>?</td></tr>
+        <tr><th>Weather</th><td>Observed: the last 7, 14 and 30 days of rainfall, temperature, humidity and wind</td><td>The ECMWF seasonal forecast (SEAS5), corrected against past observations</td></tr>
+        <tr><th>Vegetation</th><td>The latest monthly satellite composites</td><td>Forecast by a neural network (LSTM) from the last 12 months of satellite data and the weather forecast</td></tr>
+        <tr><th>Pest models</th><td colspan="2" class="text-center">The same trained models for both</td></tr>
+        <tr><th>One map per</th><td>date (weekly)</td><td>month, mapped for the {{ map_day }}th</td></tr>
+        <tr><th>Updated</th><td>every week</td><td>every month, after the new seasonal forecast is released</td></tr>
+        <tr><th>Certainty</th><td>Higher: built from what has happened</td><td>Lower, and lower again for months further ahead</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h2 id="how">How a map is made</h2>
+    <ol class="pw-flow">
+      <li><strong>Collect the weather.</strong> Every day the system downloads the latest observed rainfall (CHIRPS),
+        temperature and wind (ERA5-Land) and humidity (ERA5) for each county. Every month it downloads the seasonal forecast.</li>
+      <li><strong>Prepare the forecast weather</strong> (forecast only). The forecast is corrected for its known errors by
+        comparing past forecasts with what was observed, then sharpened to 30 m using elevation: higher ground is cooler.</li>
+      <li><strong>Forecast the vegetation</strong> (forecast only). The LSTM model predicts 18 satellite vegetation indices and bands
+        for each of the coming months, cell by cell.</li>
+      <li><strong>Run the pest models.</strong> For each pest, an ensemble of six statistical models (MaxEnt, GAM, random forest,
+        gradient boosting, XGBoost, SVM) scores every cell from 35-40 predictors: terrain, soil, crop type, weather over
+        the last 7-30 days and the satellite indices. A temperature model adds what is known about the pest's biology.
+        Aphids also use the fall armyworm map, and MLND uses the maps of its insect vectors.</li>
+      <li><strong>Publish.</strong> The hybrid score and its five classes are published as map layers, with summaries per
+        county, constituency and ward.</li>
+    </ol>
+
+    <h2 id="data">Data sources</h2>
+    <div class="table-responsive">
+    <table class="table pw-table">
+      <thead><tr><th>Data</th><th>Source</th><th>Resolution</th><th>How it gets here</th></tr></thead>
+      <tbody>
+        <tr><td>Rainfall</td><td>CHIRPS v2 (UCSB Climate Hazards Center)</td><td>~5.5 km, daily</td><td>Automatic (Google Earth Engine)</td></tr>
+        <tr><td>Max / min temperature</td><td>ERA5-Land (ECMWF)</td><td>~9 km, daily</td><td>Automatic (Copernicus CDS)</td></tr>
+        <tr><td>Relative humidity</td><td>ERA5 (ECMWF), from temperature and dewpoint</td><td>~28 km, daily</td><td>Automatic (Copernicus CDS)</td></tr>
+        <tr><td>Wind</td><td>ERA5-Land (ECMWF)</td><td>~11 km, daily</td><td>Automatic (Google Earth Engine)</td></tr>
+        <tr><td>Seasonal forecast</td><td>SEAS5 (ECMWF), 51 ensemble members</td><td>~1°, 7 months ahead</td><td>Automatic (Copernicus CDS), monthly</td></tr>
+        <tr><td>Vegetation indices, Sentinel-2, Landsat</td><td>Monthly satellite composites</td><td>10-30 m</td><td>Uploaded monthly by managers</td></tr>
+        <tr><td>Elevation, soil, crop type</td><td>SRTM, ISRIC SoilGrids, JRC crop maps</td><td>30-250 m</td><td>Uploaded once</td></tr>
+        <tr><td>Pest records</td><td>Field surveys</td><td>points</td><td>Uploaded; used to train the models</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h2 id="reading">Reading the maps</h2>
+    <ul>
+      <li><strong>Risk is relative.</strong> A high score means conditions in that cell resemble those where the pest has
+        been found, compared with the rest of the county. It is not a count of pests or a probability of finding one.</li>
+      <li><strong>Compare like with like.</strong> Each county has its own models, so compare places within a county,
+        and dates within a county.</li>
+      <li><strong>Use the classes to prioritise.</strong> "High" and "Very high" areas are where scouting is most worthwhile.</li>
+      <li><strong>Read forecasts as tendencies.</strong> A forecast says where conditions are expected to be more or less
+        favourable than usual; check the nowcast as the month arrives.</li>
+    </ul>
+
+    <h2 id="updates">When maps are updated</h2>
+    <ul>
+      <li>Weather downloads: every day.</li>
+      <li>Nowcast: every week. The map date is the latest day for which all observed weather is available, usually about a week ago.</li>
+      <li>Forecast: every month, a few days after the seasonal forecast is released on the 5th. A new forecast replaces
+        the previous one for the months they share. Each month's map shows the issue date in the <em>Month</em> list.</li>
+    </ul>
+
+    <h2 id="limits">Limits</h2>
+    <ul>
+      <li>The models only know the conditions of the field records they were trained on. Months or places with few
+        records are less reliable.</li>
+      <li>Weather is much coarser than 30 m; temperature and humidity are adjusted for elevation, rainfall and wind are not.</li>
+      <li>Seasonal forecasts have limited skill beyond the first one or two months.</li>
+      <li>The forecast needs the satellite composites of the previous month. If they arrive late, the forecast is late too.</li>
+    </ul>
+
+    {% if can_processes or can_inputs %}
+    <h2 id="managers">For managers</h2>
+    <h3>What runs on its own</h3>
+    <table class="table pw-table">
+      <thead><tr><th>Run</th><th>When (UTC)</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td>Weather download</td><td>daily, {{ schedule.weather.hour }}:00</td><td>CHIRPS, ERA5-Land temperature and wind, ERA5 humidity for the last weeks (the whole history for a new county).</td></tr>
+        <tr><td>Nowcast</td><td>weekly, {{ nowcast_day }} {{ schedule.nowcast.hour }}:00</td><td>Maps the latest date with observed weather and publishes it, unless that date is already published.</td></tr>
+        <tr><td>Forecast</td><td>monthly, day {{ schedule.forecast.day }}, {{ schedule.forecast.hour }}:00</td><td>SEAS5 download, bias correction, 30 m downscaling, LSTM (dataset, stores, training, forecast), pest maps for {{ forecast_months }} months, publishing.</td></tr>
+      </tbody>
+    </table>
+    <p>Runs wait in a queue and run one at a time in the <code>pestmodels</code> container. If an automatic run fails, it
+      is retried a few hours later, up to three times per period. If a run cannot start because something is missing
+      (a key, a model, last month's composites), the <a href="{% url 'pestwatch:process_list' %}">Processes</a> page says
+      what it is waiting for, and the run starts once it is fixed.</p>
+
+    <h3>What you can do</h3>
+    <ul>
+      <li><strong>Watch</strong> runs, their steps and their log on <a href="{% url 'pestwatch:process_list' %}">Processes</a>.</li>
+      <li><strong>Retry</strong> a failed run: it continues from the step that failed.</li>
+      <li><strong>Start</strong> a run for a chosen period: download weather for past dates, map past nowcast dates, re-run a
+        forecast month, or retrain the pest models after uploading new incidence records.</li>
+      <li><strong>Pause</strong> an automatic schedule, e.g. during maintenance.</li>
+      <li><strong>Upload</strong> what no download produces on <a href="{% url 'pestwatch:input_list' %}">Input data</a>:
+        static layers once, satellite composites every month, trained models and incidence records.</li>
+      <li>Model layers appear under Layers like uploaded ones; they can be hidden or deleted there.</li>
+    </ul>
+
+    <h3>One-time setup</h3>
+    <ol>
+      <li>Google Earth Engine: a service account registered for Earth Engine. Put its JSON key on the server and set
+        <code>PESTWATCH_GEE_KEY_FILE</code> (the path inside the container) and <code>PESTWATCH_GEE_PROJECT</code> in <code>.env</code>.</li>
+      <li>Copernicus CDS: set <code>CDS_API_KEY</code> (and <code>CDS_API_URL</code>) in <code>.env</code>, then log in to the CDS
+        website once and accept the licences of <em>derived-era5-land-daily-statistics</em>,
+        <em>derived-era5-single-levels-daily-statistics</em> and <em>seasonal-original-single-levels</em>.</li>
+      <li>Upload, for each county: the DEM, soil and crop layers, the pest models, and the monthly composites (at least the
+        last 12 months for the forecast).</li>
+      <li>Optionally copy the existing weather archive into the data folder to avoid downloading years of history.</li>
+    </ol>
+    {% endif %}
+  </article>
+</div>
+{% endblock %}

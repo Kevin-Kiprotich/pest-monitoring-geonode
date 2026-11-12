@@ -1,0 +1,73 @@
+{% extends "pestwatch/base_portal.html" %}
+{% load static %}
+
+{% block page_title %}{{ mode.title }}{% endblock %}
+{% block main_class %}pw-main-full{% endblock %}
+
+{# Full-page app: the portal fills the window below the header, without the footer. #}
+{% block body_extra_class %}{{ block.super }} pw-fullpage{% endblock %}
+{% block footer %}{% endblock %}
+
+{% block portal_head %}
+  <link rel="stylesheet" href="{% static 'pestwatch/vendor/leaflet/leaflet.css' %}">
+{% endblock %}
+
+{% block portal_content %}
+<div class="pw-dashboard">
+  <section class="pw-map-area" aria-label="Map">
+    <form class="pw-toolbar" id="pw-controls" onsubmit="return false">
+      <div class="pw-toolbar-group pw-mode" aria-label="Mode">
+        <strong class="pw-mode-title"><i class="fa {% if config.mode == 'forecast' %}fa-line-chart{% else %}fa-map{% endif %}" aria-hidden="true"></i> {{ mode.title }}</strong>
+        <span class="pw-subtle">{{ mode.intro }} <a href="{% url 'pestwatch:about' %}">How it works</a></span>
+      </div>
+      <div class="pw-toolbar-group" aria-label="What to show">
+        <label class="pw-control pw-control-county">
+          <span>County</span>
+          <select id="pw-county" class="form-control"></select>
+        </label>
+        <label class="pw-control pw-control-pest">
+          <span>Pest</span>
+          <select id="pw-pest" class="form-control"></select>
+        </label>
+        <div class="pw-control">
+          <span>Product</span>
+          <div class="pw-segmented" id="pw-product" role="group" aria-label="Product"></div>
+        </div>
+        <label class="pw-control pw-control-period" id="pw-period-wrap">
+          <span>{% if config.mode == 'forecast' %}Month{% else %}Date{% endif %}</span>
+          <select id="pw-period" class="form-control"></select>
+        </label>
+      </div>
+      <div class="pw-toolbar-group pw-toolbar-display" aria-label="How to show it">
+        <div class="pw-control">
+          <span>Units</span>
+          <div class="pw-segmented" id="pw-level" role="group" aria-label="Units"></div>
+        </div>
+        <label class="pw-switch" title="Colour each unit by its mean instead of showing the raster">
+          <input type="checkbox" id="pw-choropleth">
+          <span class="pw-switch-track" aria-hidden="true"></span>
+          <span class="pw-switch-label">Shade units</span>
+        </label>      </div>
+    </form>
+    <div class="pw-map-wrap">
+      <div id="pw-map" class="pw-map"></div>
+      <div class="pw-map-panel pw-legend" id="pw-legend" hidden></div>
+      <div class="pw-map-panel pw-opacity" id="pw-opacity-wrap" hidden>
+        <label for="pw-opacity">Opacity</label>
+        <input type="range" id="pw-opacity" min="0" max="100" value="80">
+      </div>
+      <div class="pw-map-notice" id="pw-notice" hidden></div>
+    </div>
+  </section>
+
+  <aside class="pw-stats" id="pw-stats" aria-label="Statistics" aria-live="polite">
+    <div class="pw-stats-placeholder">Loading…</div>
+  </aside>
+</div>
+{{ config|json_script:"pw-config" }}
+{% endblock %}
+
+{% block portal_script %}
+  <script src="{% static 'pestwatch/vendor/leaflet/leaflet.js' %}"></script>
+  <script src="{% static 'pestwatch/js/dashboard.js' %}"></script>
+{% endblock %}

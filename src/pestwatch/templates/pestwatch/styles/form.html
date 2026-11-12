@@ -1,0 +1,26 @@
+{% extends "pestwatch/base_portal.html" %}
+
+{% block page_title %}{% if style.pk %}Edit {{ style }}{% else %}New style{% endif %}{% endblock %}
+
+{% block portal_content %}
+{% include "pestwatch/layers/_tabs.html" %}
+
+<div class="pw-form-page pw-form-wide">
+  <h2>{% if style.pk %}Edit {{ style }}{% else %}New style{% endif %}</h2>
+  <form method="post" enctype="multipart/form-data" novalidate>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+    <div class="row">
+      <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.name %}</div>
+      <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.title %}</div>
+      <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.product_type %}</div>
+    </div>
+    {% include "pestwatch/_field.html" with field=form.sld_file %}
+    {% include "pestwatch/_field.html" with field=form.sld_body %}
+    <div class="pw-form-actions">
+      <button type="submit" class="btn btn-primary">Save</button>
+      <a class="btn btn-default" href="{% url 'pestwatch:style_list' %}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

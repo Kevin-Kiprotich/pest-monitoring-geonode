@@ -5,7 +5,7 @@ x-common-django:
   env_file:
     - .env
   volumes:
-    # - './src:/usr/src/project'  # Uncomment for local development
+    - './src:/usr/src/project'  # Uncomment for local development 
     - statics:/mnt/volumes/statics
     - geoserver-data-dir:/geoserver_data/data
     - backup-restore:/backup_restore
@@ -51,6 +51,42 @@ services:
       interval: 30s
       timeout: 10s
       retries: 2
+
+  # PestWatch model worker: downloads weather, runs the forecast/nowcast models on schedule
+  # and publishes the maps. The model libraries are in their own virtualenv in this image,
+  # so GeoNode's environment is untouched. See src/pestwatch/orchestrator.py.
+  pestmodels:
+    << : *default-common-django
+    build:
+      context: ./
+      dockerfile: docker/pestmodels/Dockerfile
+      args:
+        - BASE_IMAGE=${COMPOSE_PROJECT_NAME}/geonode:${GEONODE_BASE_IMAGE_VERSION}
+    image: ${COMPOSE_PROJECT_NAME}/pestmodels:${GEONODE_BASE_IMAGE_VERSION}
+    container_name: pestmodels4${COMPOSE_PROJECT_NAME}
+    environment:
+      # Reuse the entrypoint's worker path: environment set-up without migrations or static files.
+      - IS_CELERY=True
+    volumes:
+      - './src:/usr/src/project'  # Uncomment for local development
+      - statics:/mnt/volumes/statics
+      - geoserver-data-dir:/geoserver_data/data
+      - backup-restore:/backup_restore
+      - data:/data
+      - tmp:/tmp
+      # Earth Engine service-account key (PESTWATCH_GEE_KEY_FILE=/run/secrets/pestwatch/gee-key.json)
+      - './secrets:/run/secrets/pestwatch:ro'
+    entrypoint: ["/usr/src/project/entrypoint.sh"]
+    command: "python manage.py pestwatch_worker"
+    healthcheck:
+      test: "pgrep -f pestwatch_worker > /dev/null"
+      start_period: 60s
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      django:
+        condition: service_healthy
 
   # Nginx serving django static/media and proxies to django/geonode
   nginx:

@@ -1,0 +1,45 @@
+from django.db import models
+from django.conf import settings
+from geonode.layers.models import Dataset
+# Create your models here.
+
+class Pest(models.Model):
+    KIND_CHOICES = [
+        ("insect", "Insect"),
+        ("disease", "Disease"),
+    ]
+    slug = models.SlugField(unique=True)
+    name = models.CharField(max_length=100)
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES)
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class ProductType(models.TextChoices):
+    HYBRID = "hybrid", "Hybrid (0-1)"
+    CLASSIFIED = "classified", "Classified"
+
+class TemporalType(models.TextChoices):
+    BASELINE="baseline", "Baseline"
+    FORECAST="forecast", "Forecast"
+    NOWCAST="nowcast", "Nowcast"
+
+class PestStyle(models.Model):
+    name = models.SlugField(unique=True)
+    title = models.CharField(max_length=100)
+    product_type = models.CharField(max_length=20, choices=ProductType.choices)
+    sld_body = models.TextField()
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True)
+    created_at = models.DateField(auto_now_add=True)
+    updated_at = models.DateField(auto_now=True)
+
+class PestLayer(models.Model):
+    pest = models.ForeignKey(Pest, on_delete=models.PROTECT)
+    product_type = models.CharField(max_length=20, choices=ProductType.choices)
+    temporal_type = models.CharField(max_length=20, choices=TemporalType.choices, default=TemporalType.BASELINE)
+    dataset = models.OneToOneField(Dataset, on_delete=models.CASCADE)
+    style = models.ForeignKey(PestStyle, on_delete=models.PROTECT)
+    is_published = models.BooleanField(default=False)
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True)
+

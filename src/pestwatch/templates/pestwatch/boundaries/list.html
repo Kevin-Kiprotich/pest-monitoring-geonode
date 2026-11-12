@@ -1,0 +1,63 @@
+{% extends "pestwatch/base_portal.html" %}
+
+{% block page_title %}Boundaries{% endblock %}
+
+{% block portal_content %}
+{% include "pestwatch/layers/_tabs.html" %}
+
+<h3>Counties</h3>
+{% if counties %}
+<div class="table-responsive">
+<table class="table pw-table">
+  <thead><tr><th>County</th><th class="text-right">Constituencies</th><th class="text-right">Wards</th><th class="text-right">Rasters</th></tr></thead>
+  <tbody>
+  {% for c in counties %}
+    <tr><td><strong>{{ c.name }}</strong></td><td class="text-right">{{ c.constituencies }}</td><td class="text-right">{{ c.wards }}</td><td class="text-right">{{ c.layers }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<div class="pw-empty-state">
+  <p>No counties yet. Rasters can only be uploaded once their county exists.</p>
+  <ol class="pw-steps">
+    <li>Upload the constituency and ward shapefiles through GeoNode (<em>Data → Upload dataset</em>).</li>
+    <li>Import the <strong>constituencies</strong> here, naming the attribute that holds the county name. The counties are created from them.</li>
+    <li>Import the <strong>wards</strong>. Each ward is matched to the constituency it falls in.</li>
+  </ol>
+</div>
+{% endif %}
+
+<h3>Imports</h3>
+{% if sources %}
+<div class="table-responsive">
+<table class="table table-hover pw-table">
+  <thead><tr><th>GeoNode dataset</th><th>Level</th><th>Name field</th><th>Parent</th><th class="text-right">Boundaries</th><th>Updated</th><th class="text-right">Actions</th></tr></thead>
+  <tbody>
+  {% for s in sources %}
+    <tr>
+      <td>{% if s.dataset %}<a href="{{ s.dataset.detail_url }}">{{ s.dataset.title }}</a>{% else %}{{ s.dataset_name }} <span class="label label-warning">dataset removed</span>{% endif %}
+        <div class="pw-subtle">{{ s.dataset_name }}</div></td>
+      <td>{{ s.get_level_display }}</td>
+      <td><code>{{ s.name_field }}</code></td>
+      <td>{% if s.parent_field %}by <code>{{ s.parent_field }}</code>{% elif s.level == 'county' %}—{% else %}spatial{% endif %}
+        {% if s.limit_values %}<div class="pw-subtle">only {{ s.limit_values }}</div>{% endif %}</td>
+      <td class="text-right">{{ s.n }}{% if s.unmatched_count %}<div class="pw-subtle">{{ s.unmatched_count }} skipped</div>{% endif %}</td>
+      <td>{{ s.updated_at|date:"j M Y H:i" }}</td>
+      <td class="text-right pw-actions">
+        {% if perms.pestwatch.change_boundarysource and s.dataset %}
+        <form method="post" action="{% url 'pestwatch:boundary_reimport' s.pk %}" class="pw-inline-form">
+          {% csrf_token %}<button class="btn btn-xs btn-default" type="submit" title="Read the dataset again, e.g. after editing it in GeoNode">Re-import</button>
+        </form>
+        {% endif %}
+        {% if perms.pestwatch.delete_boundarysource %}<a class="btn btn-xs btn-danger" href="{% url 'pestwatch:boundary_delete' s.pk %}">Delete</a>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="text-muted">Nothing imported yet.</p>
+{% endif %}
+{% endblock %}

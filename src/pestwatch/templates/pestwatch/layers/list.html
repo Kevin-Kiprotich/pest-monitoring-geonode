@@ -1,0 +1,88 @@
+{% extends "pestwatch/base_portal.html" %}
+{% load humanize %}
+
+{% block page_title %}Layers{% endblock %}
+
+{% block portal_content %}
+{% include "pestwatch/layers/_tabs.html" %}
+
+<form class="form-inline pw-filters" method="get">
+  <select name="county" class="form-control" aria-label="County">
+    <option value="">All counties</option>
+    {% for c in counties %}<option value="{{ c.pk }}" {% if filters.county == c.pk|stringformat:'s' %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
+  </select>
+  <select name="pest" class="form-control" aria-label="Pest">
+    <option value="">All pests</option>
+    {% for p in pests %}<option value="{{ p.slug }}" {% if filters.pest == p.slug %}selected{% endif %}>{{ p.name }}</option>{% endfor %}
+  </select>
+  <select name="product" class="form-control" aria-label="Product">
+    <option value="">All products</option>
+    {% for v, label in products %}<option value="{{ v }}" {% if filters.product == v %}selected{% endif %}>{{ label }}</option>{% endfor %}
+  </select>
+  <select name="status" class="form-control" aria-label="Status">
+    <option value="">Any status</option>
+    {% for v, label in statuses %}<option value="{{ v }}" {% if filters.status == v %}selected{% endif %}>{{ label }}</option>{% endfor %}
+  </select>
+  <button class="btn btn-default btn-sm" type="submit">Filter</button>
+  {% if filters %}<a class="btn btn-link btn-sm" href="{% url 'pestwatch:layer_list' %}">Clear</a>{% endif %}
+</form>
+
+{% if layers %}
+<div class="table-responsive">
+<table class="table table-hover pw-table">
+  <thead>
+    <tr>
+      <th>Layer</th><th>County</th><th>Pest</th><th>Product</th><th>Period</th>
+      <th>Status</th><th>Dashboard</th><th>Uploaded</th><th class="text-right">Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for layer in layers %}
+    <tr data-layer-id="{{ layer.pk }}">
+      <td>
+        <a href="{% url 'pestwatch:layer_detail' layer.pk %}"><strong>{{ layer }}</strong></a>
+        <div class="pw-subtle">{{ layer.source_filename }}{% if layer.file_size %} · {{ layer.file_size|filesizeformat }}{% endif %}</div>
+      </td>
+      <td>{{ layer.county }}</td>
+      <td>{{ layer.pest }}</td>
+      <td>{{ layer.get_product_type_display }}</td>
+      <td>{% if layer.valid_from %}{{ layer.valid_from|date:"M Y" }}{% if layer.valid_to %} – {{ layer.valid_to|date:"M Y" }}{% endif %}{% else %}<span class="pw-subtle">—</span>{% endif %}</td>
+      <td>
+        <span class="pw-status pw-status-{{ layer.status }}" title="{{ layer.status_message }}">{{ layer.get_status_display }}</span>
+        {% if layer.status == 'failed' %}<div class="pw-error-text">{{ layer.status_message|truncatechars:140 }}</div>{% endif %}
+        {% if layer.status == 'ready' %}<div class="pw-subtle">{{ layer.stat_count }} zone{{ layer.stat_count|pluralize }}</div>{% endif %}
+      </td>
+      <td>
+        {% if perms.pestwatch.change_pestlayer %}
+        <form method="post" action="{% url 'pestwatch:layer_toggle_publish' layer.pk %}" class="pw-inline-form">
+          {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
+          <button type="submit" class="btn btn-xs {% if layer.is_published %}btn-success{% else %}btn-default{% endif %}"
+                  title="{% if layer.is_published %}Shown; click to hide{% else %}Hidden; click to show{% endif %}">
+            {% if layer.is_published %}<i class="fa fa-eye"></i> Shown{% else %}<i class="fa fa-eye-slash"></i> Hidden{% endif %}
+          </button>
+        </form>
+        {% else %}{{ layer.is_published|yesno:"Shown,Hidden" }}{% endif %}
+      </td>
+      <td><span title="{{ layer.created_at }}">{{ layer.created_at|naturaltime }}</span><div class="pw-subtle">{{ layer.uploaded_by|default:"" }}</div></td>
+      <td class="text-right pw-actions">
+        {% if layer.dataset %}<a class="btn btn-xs btn-default" href="{{ layer.dataset.detail_url }}" title="Open in GeoNode"><i class="fa fa-external-link"></i></a>{% endif %}
+        {% if perms.pestwatch.change_pestlayer %}<a class="btn btn-xs btn-default" href="{% url 'pestwatch:layer_edit' layer.pk %}">Edit</a>{% endif %}
+        {% if perms.pestwatch.delete_pestlayer %}<a class="btn btn-xs btn-danger" href="{% url 'pestwatch:layer_delete' layer.pk %}">Delete</a>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<div class="pw-empty-state">
+  <p>No rasters {% if filters %}match these filters{% else %}have been uploaded yet{% endif %}.</p>
+  {% if not filters and perms.pestwatch.add_pestlayer %}<a class="btn btn-primary" href="{% url 'pestwatch:layer_upload' %}">Upload the first raster</a>{% endif %}
+</div>
+{% endif %}
+
+{% if busy_ids %}
+{{ busy_ids|json_script:"pw-busy-ids" }}
+<span id="pw-status-url" data-url="{% url 'pestwatch:api_layer_status' %}" hidden></span>
+{% endif %}
+{% endblock %}

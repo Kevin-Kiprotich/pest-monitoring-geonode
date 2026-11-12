@@ -1,0 +1,20 @@
+{% extends "pestwatch/base_portal.html" %}
+
+{% block page_title %}Delete {{ object }}{% endblock %}
+
+{% block portal_content %}
+{% include "pestwatch/layers/_tabs.html" %}
+
+<div class="pw-form-page">
+  <h2>Delete {{ object }}?</h2>
+  {% if consequences %}
+  <ul class="pw-consequences">{% for line in consequences %}<li>{{ line }}</li>{% endfor %}</ul>
+  {% endif %}
+  <p><strong>This can't be undone.</strong></p>
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-danger">Delete</button>
+    <a class="btn btn-default" href="{% url cancel_url %}">Cancel</a>
+  </form>
+</div>
+{% endblock %}

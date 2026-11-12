@@ -70,3 +70,7 @@ local_settings.py
 .vagrant/
 Vagrantfile
 /.env
+
+# PestWatch model secrets (Earth Engine key)
+secrets/*
+!secrets/README.txt

@@ -1,0 +1,77 @@
+{% extends 'geonode-mapstore-client/snippets/brand_navbar.html' %}
+{% load i18n static %}
+
+{% block extra_style %}
+    <style>
+        /* Apps dropdown */
+        #apps-menu .fa-angle-down { margin-left: 6px; transition: transform 0.15s ease; }
+        .dropdown.open #apps-menu .fa-angle-down { transform: rotate(180deg); }
+        .gn-apps-menu { min-width: 260px; padding: 6px 0; }
+        .gn-apps-menu > li > a { display: flex !important; align-items: center; gap: 12px; padding: 8px 16px !important; white-space: normal; }
+        .gn-apps-menu .gn-app-icon {height: 36px; width:36px; border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            background: #e8f3ea; color: #2e7d32; font-size: 16px;
+        }
+        .gn-apps-menu .gn-app-text { display: flex; flex-direction: column; line-height: 1.3; }
+        .gn-apps-menu .gn-app-name { font-weight: 600; }
+        .gn-apps-menu .gn-app-desc { font-size: 12px; opacity: 0.7; }
+        /* GeoNode underlines the whole active item; keep that to the app name only */
+        .msgapi .gn-main-header .gn-apps-menu > li.active > a { text-decoration: none; font-weight: normal; background-color: #f4f9f5; }
+        .gn-apps-menu > li.active .gn-app-name { text-decoration: underline; }
+
+        /* Partner logos */
+        .gn-partner-logos {
+            display: flex; align-items: center; gap: 10px;
+            padding: 0 10px;
+            border-left: 1px solid rgba(0, 0, 0, 0.12);
+            border-right: 1px solid rgba(0, 0, 0, 0.12);
+        }
+        .gn-partner-logos a { display: flex; align-items: center; opacity: 0.9; transition: opacity 0.15s ease; }
+        .gn-partner-logos a:hover, .gn-partner-logos a:focus { opacity: 1; }
+        .gn-partner-logos .gn-logo-rcmrd { height: 36px; width: auto; }
+        .gn-partner-logos .gn-logo-tetratech { height: 24px; width: auto; }
+        @media (max-width: 1400px) { .gn-partner-logos { display: none; } }
+    </style>
+{% endblock %}
+
+{% block default_left_menu_items %}
+    {{ block.super }}
+    <li>
+        <div class="dropdown">
+            <button
+                id="apps-menu"
+                role="button"
+                aria-haspopup="true"
+                aria-expanded="false"
+                type="button"
+                class="dropdown-toggle btn btn-default"
+                data-toggle="dropdown"
+            >
+                {% trans "Apps" %}<i class="fa fa-angle-down" aria-hidden="true"></i>
+            </button>
+            <ul class="dropdown-menu gn-apps-menu" aria-labelledby="apps-menu">
+                <li>
+                    <a href="{% url 'pestwatch:index' %}">
+                        <span class="gn-app-icon"><i style="margin:0px;"class="fa fa-bug" aria-hidden="true"></i></span>
+                        <span class="gn-app-text">
+                            <span class="gn-app-name">{% trans "PestWatch" %}</span>
+                            <span class="gn-app-desc">{% trans "Monitor pests with datasets and indicators" %}</span>
+                        </span>
+                    </a>
+                </li>
+            </ul>
+        </div>
+    </li>
+{% endblock %}
+
+{% block default_right_menu_items %}
+    <li class="gn-partner-logos" aria-label="{% trans 'Partners' %}">
+        <a href="https://www.rcmrd.org" target="_blank" rel="noopener" title="RCMRD">
+            <img class="gn-logo-rcmrd" src="{% static 'img/rcmrd-logo.jpeg' %}" alt="RCMRD">
+        </a>
+        <a href="https://www.tetratech.com" target="_blank" rel="noopener" title="Tetra Tech">
+            <img class="gn-logo-tetratech" src="{% static 'img/tetra-tech-logo.svg' %}" alt="Tetra Tech">
+        </a>
+    </li>
+    {{ block.super }}
+{% endblock %}

@@ -1,0 +1,100 @@
+{% extends "pestwatch/base_portal.html" %}
+{% load humanize pestwatch_tags %}
+
+{% block page_title %}{{ run }}{% endblock %}
+
+{% block portal_content %}
+<div class="pw-page-header">
+  <h1>{{ run.get_pipeline_display }} #{{ run.pk }}
+    <span class="pw-run-status pw-run-{{ run.status }}" id="pw-run-status">{{ run.get_status_display }}</span></h1>
+  <div class="pw-page-actions">
+    <a class="btn btn-default" href="{% url 'pestwatch:process_list' %}"><i class="fa fa-arrow-left"></i> All runs</a>
+    {% if perms.pestwatch.change_pipelinerun %}
+      {% if run.is_active %}
+      <form method="post" action="{% url 'pestwatch:process_cancel' run.pk %}" class="pw-inline-form">
+        {% csrf_token %}<button type="submit" class="btn btn-danger" {% if run.cancel_requested %}disabled{% endif %}>
+          <i class="fa fa-stop"></i> {% if run.cancel_requested %}Stopping…{% else %}Stop{% endif %}</button>
+      </form>
+      {% else %}
+      <form method="post" action="{% url 'pestwatch:process_retry' run.pk %}" class="pw-inline-form">
+        {% csrf_token %}<button type="submit" class="btn btn-primary" title="Queue this run again; finished steps are not repeated">
+          <i class="fa fa-repeat"></i> {% if run.status == 'succeeded' %}Run again{% else %}Retry{% endif %}</button>
+      </form>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+
+<dl class="pw-facts">
+  <div><dt>Period</dt><dd>{{ run.period_label }}</dd></div>
+  <div><dt>Counties</dt><dd>{{ run.params.counties|join:", "|default:"—" }}</dd></div>
+  <div><dt>Started by</dt><dd>{% if run.trigger == 'schedule' %}the schedule ({{ run.period_key }}){% else %}{{ run.created_by|default:"a manager" }}{% endif %}</dd></div>
+  <div><dt>Started</dt><dd>{{ run.started_at|default:"not yet" }}</dd></div>
+  <div><dt>Duration</dt><dd>{{ run.duration|duration }}</dd></div>
+  <div><dt>Attempts</dt><dd>{{ run.attempts }}</dd></div>
+</dl>
+{% if run.message %}
+<div class="alert {% if run.status == 'failed' %}alert-danger{% else %}alert-info{% endif %}" id="pw-run-message">{{ run.message }}</div>
+{% endif %}
+
+<h3>Steps</h3>
+<ol class="pw-run-steps" id="pw-run-steps">
+  {% for s in steps %}
+  <li class="pw-run-step pw-step-{{ s.step.status }}" data-step="{{ s.step.pk }}">
+    <span class="pw-step-dot pw-step-{{ s.step.status }}"></span>
+    <div>
+      <strong>{{ s.label }}</strong> <span class="pw-subtle" data-role="status">{{ s.step.get_status_display }}{% if s.step.duration %} · {{ s.step.duration|duration }}{% endif %}</span>
+      <div class="pw-subtle" data-role="message">{{ s.step.message|truncatechars:500 }}</div>
+    </div>
+  </li>
+  {% endfor %}
+</ol>
+
+{% if layers %}
+<h3>Published layers</h3>
+<div class="table-responsive">
+<table class="table pw-table">
+  <thead><tr><th>Layer</th><th>Status</th></tr></thead>
+  <tbody>
+  {% for layer in layers %}
+    <tr><td><a href="{% url 'pestwatch:layer_detail' layer.pk %}">{{ layer }}</a></td>
+      <td><span class="pw-status pw-status-{{ layer.status }}">{{ layer.get_status_display }}</span></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+
+<h3>Log</h3>
+<pre class="pw-log" id="pw-run-log">{{ log|default:"No log yet." }}</pre>
+{% endblock %}
+
+{% block portal_script %}
+{% if run.is_active %}
+<script>
+(function () {
+  var url = "{% url 'pestwatch:process_status' run.pk %}";
+  var logEl = document.getElementById("pw-run-log");
+  function poll() {
+    fetch(url, {credentials: "same-origin"}).then(function (r) { return r.json(); }).then(function (d) {
+      var atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 20;
+      logEl.textContent = d.log || "No log yet.";
+      if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+      d.steps.forEach(function (s) {
+        var li = document.querySelector('[data-step="' + s.id + '"]');
+        if (!li) return;
+        li.className = "pw-run-step pw-step-" + s.status;
+        li.querySelector(".pw-step-dot").className = "pw-step-dot pw-step-" + s.status;
+        li.querySelector('[data-role="status"]').textContent = s.label;
+        li.querySelector('[data-role="message"]').textContent = (s.message || "").slice(0, 500);
+      });
+      if (d.status === "queued" || d.status === "running") setTimeout(poll, 10000);
+      else window.location.reload();
+    }).catch(function () { setTimeout(poll, 30000); });
+  }
+  logEl.scrollTop = logEl.scrollHeight;
+  setTimeout(poll, 10000);
+})();
+</script>
+{% endif %}
+{% endblock %}

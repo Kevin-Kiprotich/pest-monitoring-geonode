@@ -1,0 +1,82 @@
+{% extends "pestwatch/base_portal.html" %}
+
+{% block page_title %}Start a run{% endblock %}
+
+{% block portal_content %}
+<div class="pw-form-page">
+  <h2>Start a run</h2>
+  <p class="text-muted">The system runs these on its own. Start one by hand to fill in a past period, re-run a forecast
+    after uploading late satellite data, or retrain the pest models with new incidence records. Runs wait in a queue and
+    run one at a time.</p>
+
+  {% if problems %}
+  <div class="alert alert-warning">
+    <strong>This run will probably fail:</strong>
+    <ul class="pw-compact-list">{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+    <fieldset class="pw-fieldset">
+      <legend>What to run</legend>
+      <div class="pw-pipeline-choice">
+        {% for radio in form.pipeline %}
+        <label class="pw-pipeline-option">
+          {{ radio.tag }}
+          <span><strong>{{ radio.choice_label }}</strong>
+            <span class="pw-subtle">
+            {% if radio.data.value == 'weather' %}Download observed rainfall, temperature, humidity and wind for a period.
+            {% elif radio.data.value == 'nowcast' %}Map current risk with the trained models. Without dates: the latest day with observed weather.
+            {% elif radio.data.value == 'forecast' %}SEAS5 download, bias correction, LSTM vegetation forecast and 7 months of risk maps. Takes hours.
+            {% else %}Retrain the pest models from the uploaded incidence records. The old models are backed up.{% endif %}
+            </span></span>
+        </label>
+        {% endfor %}
+      </div>
+      {% for error in form.pipeline.errors %}<span class="help-block text-danger">{{ error }}</span>{% endfor %}
+    </fieldset>
+
+    <fieldset class="pw-fieldset" data-for="weather nowcast">
+      <legend>Period</legend>
+      <div class="row">
+        <div class="col-sm-6">{% include "pestwatch/_field.html" with field=form.start %}</div>
+        <div class="col-sm-6">{% include "pestwatch/_field.html" with field=form.end %}</div>
+      </div>
+    </fieldset>
+    <fieldset class="pw-fieldset" data-for="forecast">
+      <legend>Forecast</legend>
+      {% include "pestwatch/_field.html" with field=form.issue %}
+    </fieldset>
+
+    <fieldset class="pw-fieldset">
+      <legend>Counties</legend>
+      <div class="pw-checkbox-columns">{{ form.counties }}</div>
+      <span class="help-block pw-help">{{ form.counties.help_text }}</span>
+    </fieldset>
+
+    <div class="pw-form-actions">
+      {% if problems %}<input type="hidden" name="confirm" value="1">{% endif %}
+      <button type="submit" class="btn btn-primary"><i class="fa fa-play"></i> {% if problems %}Start anyway{% else %}Start{% endif %}</button>
+      <a class="btn btn-link" href="{% url 'pestwatch:process_list' %}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block portal_script %}
+<script>
+(function () {
+  function sync() {
+    var picked = document.querySelector('input[name="pipeline"]:checked');
+    var v = picked ? picked.value : "";
+    document.querySelectorAll("[data-for]").forEach(function (el) {
+      el.hidden = el.getAttribute("data-for").split(" ").indexOf(v) < 0;
+    });
+  }
+  document.querySelectorAll('input[name="pipeline"]').forEach(function (r) { r.addEventListener("change", sync); });
+  sync();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,63 @@
+{% extends "pestwatch/base_portal.html" %}
+
+{% block page_title %}Import boundaries{% endblock %}
+
+{% block portal_content %}
+{% include "pestwatch/layers/_tabs.html" %}
+
+<div class="pw-form-page">
+  <h2>Import boundaries from GeoNode</h2>
+  <p class="text-muted">
+    Pick a polygon dataset already uploaded to GeoNode and say which attributes hold the names.
+    Import constituencies before wards: each ward is placed in a constituency, and each constituency in a county.
+  </p>
+  <form method="post" novalidate id="pw-import-form" data-fields-url="{% url 'pestwatch:api_dataset_fields' 0 %}">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+    <div class="row">
+      <div class="col-sm-8">{% include "pestwatch/_field.html" with field=form.dataset %}</div>
+      <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.level %}</div>
+    </div>
+    <p class="pw-subtle" id="pw-fields-hint" hidden></p>
+    <datalist id="pw-dataset-fields"></datalist>
+    <div class="row">
+      <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.name_field %}</div>
+      <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.code_field %}</div>
+      <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.parent_field %}</div>
+    </div>
+    {% include "pestwatch/_field.html" with field=form.limit_values %}
+    <div class="pw-form-actions">
+      <button type="submit" class="btn btn-primary">Import</button>
+      <a class="btn btn-default" href="{% url 'pestwatch:boundary_list' %}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block portal_script %}
+<script>
+(function () {
+  var form = document.getElementById("pw-import-form");
+  var select = document.getElementById("id_dataset");
+  var list = document.getElementById("pw-dataset-fields");
+  var hint = document.getElementById("pw-fields-hint");
+
+  // Offer the chosen dataset's attribute names as suggestions.
+  function loadFields() {
+    list.innerHTML = "";
+    hint.hidden = true;
+    if (!select.value) return;
+    var url = form.getAttribute("data-fields-url").replace("/0/", "/" + select.value + "/");
+    fetch(url, {credentials: "same-origin"}).then(function (r) { return r.json(); }).then(function (data) {
+      data.fields.forEach(function (f) {
+        var opt = document.createElement("option"); opt.value = f; list.appendChild(opt);
+      });
+      hint.textContent = data.error ? data.error : "Attributes: " + data.fields.join(", ");
+      hint.hidden = false;
+    });
+  }
+  select.addEventListener("change", loadFields);
+  loadFields();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,111 @@
+{% extends "pestwatch/base_portal.html" %}
+
+{% block page_title %}Upload raster{% endblock %}
+
+{% block portal_content %}
+{% include "pestwatch/layers/_tabs.html" %}
+
+<div class="pw-form-page">
+  <h2>Upload a raster</h2>
+  <p class="text-muted">
+    The file is checked before anything is published. It must be a single-band GeoTIFF with a nodata value,
+    covering the county you choose. Hybrid rasters hold values from 0 to 1; classified rasters hold the class values
+    1 (very low) to 5 (very high).
+  </p>
+
+  <form method="post" enctype="multipart/form-data" id="pw-upload-form" novalidate>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+
+    <fieldset class="pw-fieldset">
+      <legend>Raster</legend>
+      {% include "pestwatch/_field.html" with field=form.raster %}
+      <div class="row">
+        <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.pest %}</div>
+        <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.product_type %}</div>
+        <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.county %}</div>
+      </div>
+      <div class="row">
+        <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.valid_from %}</div>
+        <div class="col-sm-4">{% include "pestwatch/_field.html" with field=form.valid_to %}</div>
+      </div>
+    </fieldset>
+
+    <fieldset class="pw-fieldset">
+      <legend>Style</legend>
+      <div class="pw-choice" role="radiogroup" aria-label="Style source">
+        <label class="radio-inline"><input type="radio" name="style_source" value="existing" {% if not form.new_sld.value and not form.new_style_name.value %}checked{% endif %}> Use a saved style</label>
+        <label class="radio-inline"><input type="radio" name="style_source" value="new" {% if form.new_style_name.value %}checked{% endif %}> Upload a new SLD</label>
+      </div>
+      <div data-style-source="existing">
+        {% include "pestwatch/_field.html" with field=form.existing_style %}
+      </div>
+      <div data-style-source="new">
+        {% include "pestwatch/_field.html" with field=form.new_sld %}
+        <div class="row">
+          <div class="col-sm-6">{% include "pestwatch/_field.html" with field=form.new_style_name %}</div>
+          <div class="col-sm-6">{% include "pestwatch/_field.html" with field=form.new_style_title %}</div>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset class="pw-fieldset">
+      <legend>Details</legend>
+      {% include "pestwatch/_field.html" with field=form.title %}
+      {% include "pestwatch/_field.html" with field=form.description %}
+      {% include "pestwatch/_field.html" with field=form.is_published %}
+    </fieldset>
+
+    <div class="pw-form-actions">
+      <button type="submit" class="btn btn-primary" id="pw-upload-submit"><i class="fa fa-upload"></i> Validate and publish</button>
+      <a class="btn btn-default" href="{% url 'pestwatch:layer_list' %}">Cancel</a>
+      <span class="pw-subtle" id="pw-upload-progress" hidden><i class="fa fa-spinner fa-spin"></i> Uploading and checking the raster…</span>
+    </div>
+  </form>
+</div>
+{{ style_products|json_script:"pw-style-products" }}
+{% endblock %}
+
+{% block portal_script %}
+<script>
+(function () {
+  var styleProducts = JSON.parse(document.getElementById("pw-style-products").textContent);
+  var product = document.getElementById("id_product_type");
+  var styleSelect = document.getElementById("id_existing_style");
+  var sources = document.querySelectorAll('input[name="style_source"]');
+
+  // Only offer styles made for the chosen product type.
+  function filterStyles() {
+    var firstMatch = null;
+    Array.prototype.forEach.call(styleSelect.options, function (opt) {
+      if (!opt.value) return;
+      var ok = !product.value || styleProducts[opt.value] === product.value;
+      opt.hidden = !ok; opt.disabled = !ok;
+      if (ok && !firstMatch) firstMatch = opt;
+    });
+    var current = styleSelect.options[styleSelect.selectedIndex];
+    if (!current || current.disabled || !current.value) styleSelect.value = firstMatch ? firstMatch.value : "";
+  }
+
+  // Show either the saved-style picker or the new-SLD fields, and clear the other.
+  function toggleSource() {
+    var chosen = document.querySelector('input[name="style_source"]:checked').value;
+    document.querySelectorAll("[data-style-source]").forEach(function (el) {
+      var on = el.getAttribute("data-style-source") === chosen;
+      el.hidden = !on;
+      el.querySelectorAll("input, select").forEach(function (input) { input.disabled = !on; });
+    });
+    if (chosen === "existing") filterStyles();
+  }
+
+  product.addEventListener("change", filterStyles);
+  sources.forEach(function (r) { r.addEventListener("change", toggleSource); });
+  toggleSource();
+
+  document.getElementById("pw-upload-form").addEventListener("submit", function () {
+    document.getElementById("pw-upload-submit").disabled = true;
+    document.getElementById("pw-upload-progress").hidden = false;
+  });
+})();
+</script>
+{% endblock %}
