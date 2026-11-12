@@ -10,7 +10,7 @@
     {% if perms.pestwatch.add_pipelinerun %}<a class="btn btn-primary" href="{% url 'pestwatch:process_start' %}"><i class="fa fa-play"></i> Start a run</a>{% endif %}
   </div>
 </div>
-<p class="text-muted pw-lead">The system downloads the weather, runs the models and publishes the maps on its own.
+<p class="text-muted pw-lead">The system downloads the weather, makes the satellite composites, runs the models and publishes the maps on its own.
   This page shows what it did, what it is waiting for, and lets you re-run a failed run or start one for a chosen period.
   <a href="{% url 'pestwatch:about' %}#managers">How the runs work</a>.</p>
 

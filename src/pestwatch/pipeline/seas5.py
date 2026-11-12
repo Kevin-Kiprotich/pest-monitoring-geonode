@@ -12,6 +12,8 @@ the bias-correction notebook reads:
 2. The archive of past forecasts with the same start month, one file per year:
    ``SEAS5_ARCHIVE/daily/SEAS5_daily_<YYYY-MM>.nc`` with temp_c, rh_pct and
    wind_speed per ensemble member (dims number, date, latitude, longitude).
+   Start months before ``conf.AUTO_FETCH_FROM`` are the modelling team's history and
+   are uploaded; only later ones are downloaded (each forecast adds its own).
 
 Daily values: mean of the four 6-hourly values ending 06, 12, 18 and 24 UTC;
 rain = difference of the accumulated total precipitation at 24 h steps; tmax /
@@ -212,11 +214,33 @@ class CountyGrid:
         os.replace(path + ".part", path)
 
 
-def fetch(layout, counties, boundaries, issue, archive_years, log=print):
-    """Download the forecast that starts on the first day of ``issue`` ("YYYY-MM") and its archive."""
-    import geopandas as gpd
+def missing_history(layout, month, archive_years, history_before):
+    """Archive years of ``month`` that start before ``history_before`` and are not on the server.
+
+    Those are the modelling team's history: they are uploaded (Input data > SEAS5 archive), never
+    downloaded. Later years are downloaded from the CDS (normally each one was already written by
+    the forecast of that year)."""
+    if history_before is None:
+        return []
+    return [y for y in archive_years if dt.date(y, month, 1) < history_before
+            and not os.path.exists(layout.seas5_archive_file(y, month))]
+
+
+def fetch(layout, counties, boundaries, issue, archive_years, history_before=None, log=print):
+    """Download the forecast that starts on the first day of ``issue`` ("YYYY-MM") and its archive.
+
+    Archive years starting before ``history_before`` must already be there (uploaded)."""
     year, month = map(int, issue.split("-"))
     start = dt.date(year, month, 1)
+    if history_before is not None and start < history_before:
+        raise RuntimeError(f"The forecast issued {issue} is history (before {history_before}): the system only "
+                           f"downloads forecasts issued from {history_before:%Y-%m}.")
+    missing = missing_history(layout, month, archive_years, history_before)
+    if missing:
+        raise RuntimeError(f"The SEAS5 archive for start month {month:02d} is missing for "
+                           f"{', '.join(map(str, missing))}. These years are history: upload them under "
+                           f"Input data > SEAS5 archive (SEAS5_daily_<YYYY>-{month:02d}.nc).")
+    import geopandas as gpd
     g = gpd.read_file(boundaries).to_crs("EPSG:4326")
     g["_n"] = g["adm1_name"].astype(str).str.strip().str.lower()
     sel = {c: g[g["_n"] == c.lower()] for c in counties}
@@ -227,7 +251,7 @@ def fetch(layout, counties, boundaries, issue, archive_years, log=print):
     raw = layout.raw("seas5")
 
     # 1. archive: the same start month in earlier years (and this year, as the notebook does)
-    archive = lambda y: os.path.join(layout.seas5_archive, f"SEAS5_daily_{y:04d}-{month:02d}.nc")
+    archive = lambda y: layout.seas5_archive_file(y, month)
     for y in archive_years:
         path = archive(y)
         if y == year or os.path.exists(path):

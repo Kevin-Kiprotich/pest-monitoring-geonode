@@ -86,12 +86,12 @@
     <table class="table pw-table">
       <thead><tr><th>Data</th><th>Source</th><th>Resolution</th><th>How it gets here</th></tr></thead>
       <tbody>
-        <tr><td>Rainfall</td><td>CHIRPS v2 (UCSB Climate Hazards Center)</td><td>~5.5 km, daily</td><td>Automatic (Google Earth Engine)</td></tr>
-        <tr><td>Max / min temperature</td><td>ERA5-Land (ECMWF)</td><td>~9 km, daily</td><td>Automatic (Copernicus CDS)</td></tr>
-        <tr><td>Relative humidity</td><td>ERA5 (ECMWF), from temperature and dewpoint</td><td>~28 km, daily</td><td>Automatic (Copernicus CDS)</td></tr>
-        <tr><td>Wind</td><td>ERA5-Land (ECMWF)</td><td>~11 km, daily</td><td>Automatic (Google Earth Engine)</td></tr>
-        <tr><td>Seasonal forecast</td><td>SEAS5 (ECMWF), 51 ensemble members</td><td>~1°, 7 months ahead</td><td>Automatic (Copernicus CDS), monthly</td></tr>
-        <tr><td>Vegetation indices, Sentinel-2, Landsat</td><td>Monthly satellite composites</td><td>10-30 m</td><td>Uploaded monthly by managers</td></tr>
+        <tr><td>Rainfall</td><td>CHIRPS v2 (UCSB Climate Hazards Center)</td><td>~5.5 km, daily</td><td>History uploaded; from {{ fetch_from }}: Google Earth Engine, daily</td></tr>
+        <tr><td>Max / min temperature</td><td>ERA5-Land (ECMWF)</td><td>~9 km, daily</td><td>History uploaded; from {{ fetch_from }}: Copernicus CDS, daily</td></tr>
+        <tr><td>Relative humidity</td><td>ERA5 (ECMWF), from temperature and dewpoint</td><td>~28 km, daily</td><td>History uploaded; from {{ fetch_from }}: Copernicus CDS, daily</td></tr>
+        <tr><td>Wind</td><td>ERA5-Land (ECMWF)</td><td>~11 km, daily</td><td>History uploaded; from {{ fetch_from }}: Google Earth Engine, daily</td></tr>
+        <tr><td>Seasonal forecast</td><td>SEAS5 (ECMWF), 51 ensemble members</td><td>~1°, 7 months ahead</td><td>Copernicus CDS, monthly. The archive of past forecasts (bias correction) before {{ fetch_from }} is uploaded</td></tr>
+        <tr><td>Vegetation indices, Sentinel-2, Landsat</td><td>Monthly satellite composites (the modelling team's recipes)</td><td>10-60 m</td><td>History uploaded; from {{ fetch_from }}: Google Earth Engine, monthly</td></tr>
         <tr><td>Elevation, soil, crop type</td><td>SRTM, ISRIC SoilGrids, JRC crop maps</td><td>30-250 m</td><td>Uploaded once</td></tr>
         <tr><td>Pest records</td><td>Field surveys</td><td>points</td><td>Uploaded; used to train the models</td></tr>
       </tbody>
@@ -132,9 +132,10 @@
     <table class="table pw-table">
       <thead><tr><th>Run</th><th>When (UTC)</th><th>What it does</th></tr></thead>
       <tbody>
-        <tr><td>Weather download</td><td>daily, {{ schedule.weather.hour }}:00</td><td>CHIRPS, ERA5-Land temperature and wind, ERA5 humidity for the last weeks (the whole history for a new county).</td></tr>
+        <tr><td>Weather download</td><td>daily, {{ schedule.weather.hour }}:00</td><td>CHIRPS, ERA5-Land temperature and wind, ERA5 humidity for the last weeks (never before {{ fetch_from }}: earlier days are the uploaded history).</td></tr>
+        <tr><td>Satellite composites</td><td>monthly, day {{ schedule.composites.day }}, {{ schedule.composites.hour }}:00</td><td>Sentinel-2, Landsat and vegetation index composites of the month that just ended, made in Earth Engine with the modelling team's recipes (months from {{ fetch_from|slice:":7" }}; uploaded files are kept).</td></tr>
         <tr><td>Nowcast</td><td>weekly, {{ nowcast_day }} {{ schedule.nowcast.hour }}:00</td><td>Maps the latest date with observed weather and publishes it, unless that date is already published.</td></tr>
-        <tr><td>Forecast</td><td>monthly, day {{ schedule.forecast.day }}, {{ schedule.forecast.hour }}:00</td><td>SEAS5 download, bias correction, 30 m downscaling, LSTM (dataset, stores, training, forecast), pest maps for {{ forecast_months }} months, publishing.</td></tr>
+        <tr><td>Forecast</td><td>monthly, day {{ schedule.forecast.day }}, {{ schedule.forecast.hour }}:00</td><td>SEAS5 download, bias correction, 30 m downscaling, LSTM (dataset, stores, forecast with the stored model), pest maps for {{ forecast_months }} months, publishing.</td></tr>
       </tbody>
     </table>
     <p>Runs wait in a queue and run one at a time in the <code>pestmodels</code> container. If an automatic run fails, it
@@ -146,11 +147,14 @@
     <ul>
       <li><strong>Watch</strong> runs, their steps and their log on <a href="{% url 'pestwatch:process_list' %}">Processes</a>.</li>
       <li><strong>Retry</strong> a failed run: it continues from the step that failed.</li>
-      <li><strong>Start</strong> a run for a chosen period: download weather for past dates, map past nowcast dates, re-run a
-        forecast month, or retrain the pest models after uploading new incidence records.</li>
+      <li><strong>Start</strong> a run for a chosen period: download weather days or composite months missed since
+        {{ fetch_from }}, map past nowcast dates, re-run a forecast month, or retrain the pest models after uploading new
+        incidence records. Downloads never go back before {{ fetch_from }}: that is the uploaded history.</li>
       <li><strong>Pause</strong> an automatic schedule, e.g. during maintenance.</li>
-      <li><strong>Upload</strong> what no download produces on <a href="{% url 'pestwatch:input_list' %}">Input data</a>:
-        static layers once, satellite composites every month, trained models and incidence records.</li>
+      <li><strong>Upload</strong> on <a href="{% url 'pestwatch:input_list' %}">Input data</a>: the history (daily
+        weather, monthly composites and the SEAS5 archive before {{ fetch_from }}), the static layers, trained models and
+        incidence records. A composite month can still be uploaded later (e.g. one Earth Engine could not make); an
+        uploaded file is never replaced by the automatic fetch.</li>
       <li>Model layers appear under Layers like uploaded ones; they can be hidden or deleted there.</li>
     </ul>
 
@@ -161,9 +165,14 @@
       <li>Copernicus CDS: set <code>CDS_API_KEY</code> (and <code>CDS_API_URL</code>) in <code>.env</code>, then log in to the CDS
         website once and accept the licences of <em>derived-era5-land-daily-statistics</em>,
         <em>derived-era5-single-levels-daily-statistics</em> and <em>seasonal-original-single-levels</em>.</li>
-      <li>Upload, for each county: the DEM, soil and crop layers, the pest models, and the monthly composites (at least the
-        last 12 months for the forecast).</li>
-      <li>Optionally copy the existing weather archive into the data folder to avoid downloading years of history.</li>
+      <li>Set <code>PESTWATCH_AUTO_FETCH_FROM</code> in <code>.env</code> (now {{ fetch_from }}): the first day the system
+        downloads. Everything before it is the modelling team's history.</li>
+      <li>Upload, for each county: the DEM, soil and crop layers and the pest models.</li>
+      <li>Upload the history, for each county: the monthly composites from 2020-01 up to the month before
+        {{ fetch_from|slice:":7" }} (the LSTM's pixel climatology is computed from them) and the daily weather up to the
+        day before {{ fetch_from }}. Upload the SEAS5 archive (all counties) for the start months before
+        {{ fetch_from|slice:":7" }}, from {{ archive_start_year }}. Large archives can also be copied into the data folder
+        in the same layout.</li>
     </ol>
     {% endif %}
   </article>

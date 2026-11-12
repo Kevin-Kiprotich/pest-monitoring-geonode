@@ -49,14 +49,19 @@ DEFAULTS = {
     "MODELS_PYTHON": os.getenv("PESTWATCH_MODELS_PYTHON", "/opt/pestmodels/bin/python"),
     # Counties the models run for. None = every county that has pest models uploaded.
     "MODEL_COUNTIES": None,
-    # Google Earth Engine service account (CHIRPS rainfall and ERA5-Land wind).
+    # Google Earth Engine service account (CHIRPS rainfall, ERA5-Land wind, satellite composites).
     "GEE_KEY_FILE": os.getenv("PESTWATCH_GEE_KEY_FILE", ""),
     "GEE_PROJECT": os.getenv("PESTWATCH_GEE_PROJECT", ""),
     # Copernicus Climate Data Store (ERA5 temperature and humidity, SEAS5).
     "CDS_URL": os.getenv("CDS_API_URL", "https://cds.climate.copernicus.eu/api"),
     "CDS_KEY": os.getenv("CDS_API_KEY", ""),
-    # Observed weather: the archive starts here; each daily run re-checks the last WEATHER_WINDOW_DAYS.
-    "WEATHER_HISTORY_START": "2020-01-01",
+    # History versus new data. Everything before this day (weather days, composite months, SEAS5
+    # archive years) is the modelling team's history: it is uploaded on Input data (or copied onto
+    # the server), never downloaded. From this day on, whatever Earth Engine or the Copernicus CDS
+    # can provide (weather, satellite composites, SEAS5) is downloaded by the pipelines; the rest
+    # (static layers, pest models, incidence records) is uploaded as before.
+    "AUTO_FETCH_FROM": os.getenv("PESTWATCH_AUTO_FETCH_FROM", "2026-11-01"),
+    # Observed weather: each daily run re-checks the last WEATHER_WINDOW_DAYS (never before AUTO_FETCH_FROM).
     "WEATHER_WINDOW_DAYS": 45,
     "ERA5_LAG_DAYS": 6,           # ERA5-Land daily statistics are about 5-6 days behind
     "RH_LAG_DAYS": 8,             # ERA5 single-level daily statistics
@@ -66,9 +71,20 @@ DEFAULTS = {
     "FORECAST_MONTHS": 7,
     "FORECAST_MAP_DAY": 15,       # each forecast month is mapped for this day
     "CROP_SEASON": "Long_Rain2023",
+    # Monthly satellite composites from Earth Engine (pipeline/composites.py). Each run fetches the
+    # month that just ended and re-fetches the REFRESH months before it that Earth Engine made: their
+    # gap filling borrows from later months (up to +/-3 months for the TOP10 recipe), which only
+    # exist once those months are over. Months before AUTO_FETCH_FROM are never fetched, and
+    # uploaded files are never replaced.
+    "COMPOSITE_REFRESH_MONTHS": 3,
+    "COMPOSITE_THREADS": 4,       # parallel tile downloads (Earth Engine high-volume endpoint)
+    # Recipe of the NDMI history: "median_qa" (the NDMI "monthly fast" notebook, with a QA band) or
+    # "monthly_mean" (the TOP10 engine). Confirm with the modelling team.
+    "NDMI_RECIPE": "median_qa",
     # When the system starts each pipeline on its own (UTC).
     "SCHEDULE": {
         "weather": {"hour": 3},                    # every day
+        "composites": {"day": 3, "hour": 1},       # every month, for the month that just ended
         "nowcast": {"weekday": 0, "hour": 5},      # every Monday (0 = Monday)
         "forecast": {"day": 6, "hour": 6},         # every month, once SEAS5 is out (released on the 5th)
     },

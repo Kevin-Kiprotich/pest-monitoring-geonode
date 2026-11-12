@@ -9,6 +9,7 @@ from .common import TimeStampedModel
 
 class Pipeline(models.TextChoices):
     WEATHER = "weather", "Weather download"
+    COMPOSITES = "composites", "Satellite composites"
     NOWCAST = "nowcast", "Nowcast"
     FORECAST = "forecast", "Forecast"
     TRAINING = "training", "Pest model training"
@@ -39,7 +40,8 @@ class PipelineRun(TimeStampedModel):
     pipeline = models.CharField(max_length=20, choices=Pipeline.choices, db_index=True)
     status = models.CharField(max_length=20, choices=RunStatus.choices, default=RunStatus.QUEUED, db_index=True)
     trigger = models.CharField(max_length=20, choices=RunTrigger.choices, default=RunTrigger.MANUAL)
-    # The scheduled period this run covers, e.g. "2026-11-10" (weather), "2026-W46" (nowcast), "2026-11" (forecast).
+    # The scheduled period this run covers, e.g. "2026-11-10" (weather), "2026-W46" (nowcast), "2026-11" (forecast,
+    # composites).
     period_key = models.CharField(max_length=20, blank=True, db_index=True)
     # counties, start, end, map_dates, issue: see orchestrator.create_run.
     params = models.JSONField(default=dict, blank=True)
@@ -63,6 +65,9 @@ class PipelineRun(TimeStampedModel):
         p = self.params or {}
         if p.get("issue"):
             return f"issued {p['issue']}"
+        if p.get("months"):
+            m = p["months"]
+            return m[0] if len(m) == 1 else f"{m[0]} to {m[-1]} ({len(m)} months)"
         if p.get("map_dates"):
             d = p["map_dates"]
             return d[0] if len(d) == 1 else f"{d[0]} to {d[-1]} ({len(d)} dates)"

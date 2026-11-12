@@ -79,7 +79,11 @@ def process_status(request, pk):
 @perm("add_pipelinerun")
 def process_start(request):
     form = StartRunForm(request.POST or None, initial={"pipeline": request.GET.get("pipeline", "nowcast"),
-                                                       "issue": f"{timezone.now():%Y-%m}"})
+                                                       "issue": f"{timezone.now():%Y-%m}",
+                                                       "products": request.GET.getlist("product"),
+                                                       "counties": request.GET.getlist("county"),
+                                                       "month_from": request.GET.get("month", ""),
+                                                       "month_to": request.GET.get("month", "")})
     problems = []
     if request.method == "POST" and form.is_valid():
         params = form.params()
@@ -147,7 +151,9 @@ def input_list(request):
             groups.append(dict(key=key, title=title, rows=[r for r in rows if r["ds"].group == key]))
     uploads = InputUpload.objects.select_related("county", "uploaded_by")[:30]
     return _section(request, "pestwatch/inputs/list.html", "inputs", counties=counties, county=county, groups=groups,
-                    uploads=uploads, with_models=with_models, data_root=conf.get("DATA_ROOT"))
+                    uploads=uploads, with_models=with_models, data_root=conf.get("DATA_ROOT"),
+                    composites_when=_schedule_text("composites").replace("Every month on ", ""),
+                    fetch_from=conf.get("AUTO_FETCH_FROM"))
 
 
 @perm("add_inputupload")
@@ -160,9 +166,9 @@ def input_upload(request, key):
         initial["county"] = request.GET["county"]
     form = InputUploadForm(ds, request.POST or None, request.FILES or None, initial=initial)
     if request.method == "POST" and form.is_valid():
-        county, f = form.cleaned_data["county"], form.cleaned_data["file"]
+        county, f = form.cleaned_data.get("county"), form.cleaned_data["file"]
         try:
-            written, skipped = inputs.save_upload(ds, county.name, form.cleaned_data.get("month"), f)
+            written, skipped = inputs.save_upload(ds, county.name if county else "", form.cleaned_data.get("month"), f)
         except inputs.InputError as e:
             form.add_error("file", str(e))
         except Exception as e:
@@ -172,8 +178,10 @@ def input_upload(request, key):
             month = form.cleaned_data.get("month")
             InputUpload.objects.create(dataset=key, county=county, month=f"{month[0]}-{month[1]:02d}" if month else "",
                                        filename=f.name, size=f.size, files_written=len(written), uploaded_by=request.user)
-            messages.success(request, f"Saved {len(written)} file{'s' if len(written) != 1 else ''} for {ds.label}, {county.name}.")
+            where = f", {county.name}" if county else ""
+            messages.success(request, f"Saved {len(written)} file{'s' if len(written) != 1 else ''} for {ds.label}{where}.")
             if skipped:
                 messages.warning(request, "Skipped: " + "; ".join(skipped[:10]))
-            return redirect(f"{reverse('pestwatch:input_list')}?county={county.pk}")
+            chosen = county.pk if county else request.GET.get("county", "")
+            return redirect(f"{reverse('pestwatch:input_list')}?county={chosen}")
     return _section(request, "pestwatch/inputs/upload.html", "inputs", form=form, ds=ds)

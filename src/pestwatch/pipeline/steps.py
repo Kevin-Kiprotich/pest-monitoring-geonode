@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 
+import composites
 import nbrun
 import seas5
 from layout import Layout, PEST_ORDER, add_months, cwv_folder, issue_months, month_end, month_range
@@ -47,6 +48,19 @@ def day(s):
     return dt.date.fromisoformat(s) if isinstance(s, str) else s
 
 
+def new_period(spec):
+    """The run's (start, end), with the start moved to AUTO_FETCH_FROM: earlier days are the uploaded history."""
+    start, end = day(spec["start"]), day(spec["end"])
+    if spec.get("auto_fetch_from"):
+        first = day(spec["auto_fetch_from"])
+        if start < first:
+            log(f"Days before {first} are the uploaded history: downloading from {first}")
+            start = first
+    if end < start:
+        raise StepSkipped(f"Nothing to download: days before {start} are the uploaded history.")
+    return start, end
+
+
 def run(spec):
     fn = STEPS.get(spec["step"])
     if fn is None:
@@ -77,16 +91,18 @@ def cds_check():
         raise RuntimeError("No CDS key. Set CDS_API_KEY (and CDS_API_URL) in .env.")
 
 
-def cds_trim_days(cutoff):
-    """Drop requested days after ``cutoff`` from CDS requests: the ERA5 notebook asks for
-    days 1-31 of every month, which fails for the current month."""
+def cds_trim_days(cutoff, first=None):
+    """Drop requested days after ``cutoff`` (and before ``first``) from CDS requests: the ERA5
+    notebook asks for days 1-31 of every month, which fails for the current month and would
+    re-download uploaded history days in the first month."""
     import cdsapi
     original = cdsapi.Client.retrieve
 
     def retrieve(self, name, request, *args, **kwargs):
         if isinstance(request, dict) and {"year", "month", "day"} <= set(request):
             y, m = int(str(request["year"]).strip("[]'\" ")), int(str(request["month"]).strip("[]'\" "))
-            days = [d for d in request["day"] if _valid_day(y, m, int(d)) and dt.date(y, m, int(d)) <= cutoff]
+            days = [d for d in request["day"] if _valid_day(y, m, int(d)) and dt.date(y, m, int(d)) <= cutoff
+                    and (first is None or dt.date(y, m, int(d)) >= first)]
             if not days:
                 raise RuntimeError(f"no days of {y}-{m:02d} are available yet (cut-off {cutoff})")
             request = dict(request, day=days)
@@ -122,10 +138,12 @@ def check_days(layout, var, counties, start, end, label):
 
 @step("fetch_chirps")
 def fetch_chirps(spec, L):
-    start, end = day(spec["start"]), day(spec["end"])
+    start, end = new_period(spec)
     counties = spec["counties"]
     for i in range(int(spec.get("refresh_days") or 0)):          # re-download days CHIRPS may have revised
         d = end - dt.timedelta(days=i)
+        if d < start:                                            # never the uploaded history
+            break
         for sub in ("county_daily_direct", "clipped_daily", "filled_daily"):
             for c in counties:
                 f = os.path.join(L.chirps_base, sub, c, f"CHIRPS_{c}_{d:%Y_%m_%d}.tif")
@@ -135,6 +153,8 @@ def fetch_chirps(spec, L):
     nbrun.run(nb("chirps"), cells=[3], params=dict(
         EE_PROJECT_ID=spec.get("gee_project") or "", SHAPEFILE_PATH=L.boundaries, NAME_COLUMN="adm1_name",
         COUNTIES=counties, OUTPUT_DIR=L.chirps_base, START_YEAR=start.year, END_YEAR=end.year,
+        # The notebook processes from 1 January of START_YEAR; start on the run's first day instead.
+        DATE_RANGE=nbrun.Expr(f"pd.date_range('{start}', _end, freq='D')"),
         PLOT_SAMPLE_AFTER_RUN=False, RUN_LEGACY_NODATA_REPAIR=False, FORCE_REBUILD_COUNTY_OUTPUTS=False,
         MAX_WORKERS=4))
     return dict(coverage=check_days(L, "precip", counties, start, min(end, _last_any(L, "precip", counties, end)),
@@ -149,11 +169,11 @@ def _last_any(L, var, counties, default):
 @step("fetch_era5_temp")
 def fetch_era5_temp(spec, L):
     cds_check()
-    start, end = day(spec["start"]), day(spec["end"])
+    start, end = new_period(spec)
     cutoff = min(end, dt.date.today() - dt.timedelta(days=int(spec.get("era5_lag_days", 6))))
     if cutoff < start:
         raise StepSkipped(f"ERA5-Land is not available after {cutoff} yet")
-    cds_trim_days(cutoff)
+    cds_trim_days(cutoff, first=start)
     work = os.path.join(spec["run_dir"], "era5_temp")
     os.makedirs(work, exist_ok=True)
     # Write straight into the folder the models read. The models' "ERA5_LAND_TEMP_fixed" step
@@ -172,7 +192,7 @@ def fetch_era5_temp(spec, L):
 @step("fetch_era5_rh")
 def fetch_era5_rh(spec, L):
     cds_check()
-    start, end = day(spec["start"]), day(spec["end"])
+    start, end = new_period(spec)
     cutoff = min(end, dt.date.today() - dt.timedelta(days=int(spec.get("rh_lag_days", 8))))
     if cutoff < start:
         raise StepSkipped(f"ERA5 is not available after {cutoff} yet")
@@ -206,7 +226,7 @@ def _date(path):
 
 @step("fetch_era5_wind")
 def fetch_era5_wind(spec, L):
-    start, end = day(spec["start"]), day(spec["end"])
+    start, end = new_period(spec)
     gee_init(spec)
     nbrun.run(nb("era5_wind"), cells=[2], params=dict(
         EE_PROJECT=spec.get("gee_project") or "", SHAPEFILE_PATH=L.boundaries, NAME_COLUMN="adm1_name",
@@ -214,6 +234,61 @@ def fetch_era5_wind(spec, L):
         MAX_WORKERS=4, FORCE_REBUILD_COUNTY_OUTPUTS=False, PLOT_SAMPLE_AFTER_RUN=False))
     last = _last_any(L, "wind", spec["counties"], end)
     return dict(wind=check_days(L, "wind", spec["counties"], start, min(end, last), "ERA5-Land wind"))
+
+
+# --- monthly satellite composites (Earth Engine) -----------------------------------------
+
+def _composite_counties(spec, L):
+    """The run's counties plus the stored LSTM's: it needs the composites of all its counties."""
+    counties = list(spec["counties"])
+    if os.path.exists(L.lstm_model):
+        counties += [c for c in _lstm_cfg(L)["COUNTIES"] if c not in counties]
+    return counties
+
+
+def _fetch_composites(spec, L, step_name):
+    keys = [k for k in composites.STEP_PRODUCTS[step_name] if not spec.get("products") or k in spec["products"]]
+    if not keys:
+        raise StepSkipped("Not selected for this run.")
+    report = composites.run(
+        L, keys, _composite_counties(spec, L), spec.get("months") or [], spec.get("refresh") or [],
+        force=bool(spec.get("force")), key_file=spec.get("gee_key_file"), project=spec.get("gee_project"),
+        threads=int(spec.get("composite_threads") or 4), ndmi_recipe=spec.get("ndmi_recipe") or "median_qa",
+        done_file=os.path.join(spec["run_dir"], f"{step_name}.done.json"),
+        fetch_from=spec.get("auto_fetch_from") or "", log=log)
+    counts = {k: len(v) for k, v in report.items() if v}
+    log(f"{step_name}: {json.dumps(counts)}")
+    for k in ("low_coverage", "no_scenes", "no_boundary", "failed"):
+        for item in report[k][:50]:
+            log(f"  {k}: {item}")
+    if report["failed"]:
+        raise RuntimeError(f"{len(report['failed'])} composite(s) could not be downloaded (finished ones are kept; "
+                           f"retry the run): {report['failed'][0]}")
+    if not report["written"]:
+        raise StepSkipped("Nothing new: " + (", ".join(f"{n} {k.replace('_', ' ')}" for k, n in counts.items())
+                                             or "no months to fetch"))
+    return dict(counts=counts, written=report["written"], low_coverage=report["low_coverage"],
+                no_boundary=report["no_boundary"])
+
+
+@step("fetch_s2_bands")
+def fetch_s2_bands(spec, L):
+    return _fetch_composites(spec, L, "fetch_s2_bands")
+
+
+@step("fetch_s2_cwv")
+def fetch_s2_cwv(spec, L):
+    return _fetch_composites(spec, L, "fetch_s2_cwv")
+
+
+@step("fetch_landsat")
+def fetch_landsat(spec, L):
+    return _fetch_composites(spec, L, "fetch_landsat")
+
+
+@step("fetch_indices")
+def fetch_indices(spec, L):
+    return _fetch_composites(spec, L, "fetch_indices")
 
 
 # --- forecast weather -------------------------------------------------------------
@@ -229,7 +304,8 @@ def fetch_seas5(spec, L):
     cds_check()
     y, _ = map(int, spec["issue"].split("-"))
     years = list(range(int(spec.get("archive_start_year", 2020)), y + 1))
-    return seas5.fetch(L, spec["counties"], L.boundaries, spec["issue"], years, log=log)
+    return seas5.fetch(L, spec["counties"], L.boundaries, spec["issue"], years,
+                       history_before=day(spec["auto_fetch_from"]) if spec.get("auto_fetch_from") else None, log=log)
 
 
 @step("bias_correct")
@@ -266,43 +342,89 @@ def _cwv_dirs(counties):
     return {c: cwv_folder(c) for c in counties}
 
 
+# The LSTM is not retrained: the stored final_model.pt (L.lstm_model) is fed the latest inputs.
+# Notebooks A and A2 rebuild the dataset and the stores up to the month before the forecast;
+# Notebook C runs the stored model on them.
+
+def _lstm_cfg(L):
+    """The stored model's settings (counties, months, ...), read from final_model.pt."""
+    import torch
+    if not os.path.exists(L.lstm_model):
+        raise RuntimeError(f"No LSTM model at {L.lstm_model}: put the trained final_model.pt there.")
+    return torch.load(L.lstm_model, map_location="cpu", weights_only=False)["cfg"]
+
+
+def _extend_model_months(art, data_npz):
+    """Let the stored model run on months after the ones it was trained on.
+
+    Notebook C requires the dataset and the stores to cover exactly the model's months
+    (cfg["MONTHS"]), which only holds when the model is retrained every cycle. The model's
+    climatology and normalisation only use months up to cfg["clim_end"], so newer months
+    change nothing it learned: they are only the encoder's recent history. The model's
+    months are extended with the dataset's, provided the dataset starts with exactly the
+    months the model was trained on.
+    """
+    import numpy as np
+    trained = [str(m) for m in art["cfg"]["MONTHS"]]
+    with np.load(data_npz, allow_pickle=False) as D:
+        months = [str(m) for m in D["months"]]
+    if months[:len(trained)] != trained:
+        raise RuntimeError(f"The LSTM dataset covers {months[0]}..{months[-1]}, but the stored model needs it to start "
+                           f"with its training months {trained[0]}..{trained[-1]} (clim_end {art['cfg']['clim_end']}).")
+    log(f"Stored LSTM (trained {art['cfg']['trained']} on {trained[0]}..{trained[-1]}) "
+        f"fed {len(months) - len(trained)} newer month(s), up to {months[-1]}")
+    art["cfg"]["MONTHS"] = months
+    return art
+
+
 @step("lstm_dataset")
 def lstm_dataset(spec, L):
+    cfg = _lstm_cfg(L)
     ey, em = _lstm_end_month(spec)
+    end = f"{ey:04d}-{em:02d}"
+    if end < cfg["MONTHS"][-1]:
+        raise RuntimeError(f"The forecast issued {spec['issue']} starts before the end of the stored model's "
+                           f"training months ({cfg['MONTHS'][-1]}).")
     os.makedirs(L.lstm_work, exist_ok=True)
+    # The model's counties, in its order: its county one-hot and climatology groups depend on it.
+    counties = list(cfg["COUNTIES"])
     nbrun.run(nb("lstm_a_dataset"), cells=[1, 3, 5, 7, 9, 12, 14, 18], params=dict(
-        COUNTIES=spec["counties"], VI_ROOT=L.data, CWV_DIR=_cwv_dirs(spec["counties"]), HIST_ROOT=L.hist,
+        COUNTIES=counties, VI_ROOT=L.data, CWV_DIR=_cwv_dirs(counties), HIST_ROOT=L.hist,
         IN_DIR=L.fc_bc, FC30_DIR=L.fc_30m, DEM_PATH=L.dem_pattern, WORK_DIR=L.lstm_work,
-        START_MONTH=spec.get("lstm_start_month", "2020-01"), END_MONTH=f"{ey:04d}-{em:02d}"))
-    return dict(end_month=f"{ey:04d}-{em:02d}")
+        START_MONTH=cfg["MONTHS"][0], END_MONTH=end))
+    return dict(end_month=end, counties=counties)
 
 
 @step("lstm_stores")
 def lstm_stores(spec, L):
+    counties = list(_lstm_cfg(L)["COUNTIES"])
     nbrun.run(nb("lstm_a2_stores"), cells=[1, 3, 5, 7, 8, 10, 13, 15], params=dict(
-        WORK_DIR=L.lstm_work, VI_ROOT=L.data, CWV_DIR=_cwv_dirs(spec["counties"]), HIST_ROOT=L.hist,
+        WORK_DIR=L.lstm_work, VI_ROOT=L.data, CWV_DIR=_cwv_dirs(counties), HIST_ROOT=L.hist,
         IN_DIR=L.fc_bc, SCENARIOS=["mean"], REBUILD_COARSE=True))
     return {}
 
 
 @step("lstm_train")
 def lstm_train(spec, L):
-    # Notebook C requires the model's months to match the stores, so the LSTM is refitted
-    # every forecast cycle (see the tracker, issue I04).
-    nbrun.run(nb("lstm_b_train"), cells=[1, 3, 5, 7, 9, 11, 12, 18], params=dict(WORK_DIR=L.lstm_work))
-    model = os.path.join(L.lstm_work, "model", "final_model.pt")
-    if not os.path.exists(model):
-        raise RuntimeError(f"Notebook B finished but {model} was not written")
-    return dict(model=model)
+    # No longer part of the forecast pipeline; kept so runs queued before the change still finish.
+    raise StepSkipped(f"The stored LSTM model ({L.lstm_model}) is used; it is not retrained.")
 
 
 @step("lstm_forecast")
 def lstm_forecast(spec, L):
+    model_counties = list(_lstm_cfg(L)["COUNTIES"])
+    counties = [c for c in spec["counties"] if c in model_counties]
+    if not counties:
+        raise RuntimeError(f"The stored LSTM covers {', '.join(model_counties)}; none of {', '.join(spec['counties'])}.")
     out = L.lstm_forecast(spec["issue"])
     os.makedirs(out, exist_ok=True)
-    nbrun.run(nb("lstm_c_forecast"), cells=[1, 3, 5, 7, 9, 11, 13, 15, 20, 22], params=dict(
-        WORK_DIR=L.lstm_work, OUT_DIR=out, TILE_CACHE=os.path.join(out, "tile_cache"), FULL_SCENARIOS=["mean"],
-        COUNTIES_TO_RUN=spec["counties"], FORCE_RECOMPUTE=False, DELETE_TILE_CACHE=False))
+    ns = nbrun.new_namespace(nb("lstm_c_forecast"))
+    ns["_extend_model_months"] = _extend_model_months
+    nbrun.run(nb("lstm_c_forecast"), cells=[1, 3, 5, 7, 9, 11, 13, 15, 20, 22], ns=ns, params=dict(
+        WORK_DIR=L.lstm_work, MODEL_PATH=L.lstm_model, SKILL_CSV=L.lstm_skill,
+        art=nbrun.Expr("_extend_model_months(art, DATA_NPZ)"),
+        OUT_DIR=out, TILE_CACHE=os.path.join(out, "tile_cache"), FULL_SCENARIOS=["mean"],
+        COUNTIES_TO_RUN=counties, FORCE_RECOMPUTE=False, DELETE_TILE_CACHE=False))
     tiffs = glob.glob(os.path.join(L.lstm_geotiff(spec["issue"]), "mean", "*", "*.tif"))
     if not tiffs:
         raise RuntimeError(f"Notebook C wrote no GeoTIFFs to {L.lstm_geotiff(spec['issue'])}")

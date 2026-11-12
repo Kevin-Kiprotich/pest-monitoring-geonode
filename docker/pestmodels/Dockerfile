@@ -5,8 +5,13 @@
 # (/opt/pestmodels) because the trained models need numpy 2 and newer
 # scikit-learn / xgboost than GeoNode's own environment: GeoNode's packages are
 # never changed.
-ARG BASE_IMAGE=geonode_project/geonode:master
-FROM ${BASE_IMAGE}
+#
+# "geonode-base" is a named build context that docker-compose.yml points at the
+# django service (additional_contexts: geonode-base: service:django). To build this
+# file by hand, supply it yourself, e.g.:
+#   docker build -f docker/pestmodels/Dockerfile \
+#     --build-context geonode-base=docker-image://geonode_project/geonode:master .
+FROM geonode-base
 
 COPY src/pestwatch/pipeline/requirements.txt /tmp/pestmodels-requirements.txt
 RUN /usr/src/venv/bin/python -m venv /opt/pestmodels \

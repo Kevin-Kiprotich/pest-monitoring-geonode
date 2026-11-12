@@ -5,9 +5,9 @@
 {% block portal_content %}
 <div class="pw-form-page">
   <h2>Start a run</h2>
-  <p class="text-muted">The system runs these on its own. Start one by hand to fill in a past period, re-run a forecast
-    after uploading late satellite data, or retrain the pest models with new incidence records. Runs wait in a queue and
-    run one at a time.</p>
+  <p class="text-muted">The system runs these on its own. Start one by hand to fill in a past period, fetch satellite
+    composites again, re-run a forecast after late satellite data, or retrain the pest models with new incidence records.
+    Runs wait in a queue and run one at a time.</p>
 
   {% if problems %}
   <div class="alert alert-warning">
@@ -28,6 +28,7 @@
           <span><strong>{{ radio.choice_label }}</strong>
             <span class="pw-subtle">
             {% if radio.data.value == 'weather' %}Download observed rainfall, temperature, humidity and wind for a period.
+            {% elif radio.data.value == 'composites' %}Make the monthly Sentinel-2, Landsat and vegetation index composites in Earth Engine, with the modelling team's recipes. Uploaded files are kept.
             {% elif radio.data.value == 'nowcast' %}Map current risk with the trained models. Without dates: the latest day with observed weather.
             {% elif radio.data.value == 'forecast' %}SEAS5 download, bias correction, LSTM vegetation forecast and 7 months of risk maps. Takes hours.
             {% else %}Retrain the pest models from the uploaded incidence records. The old models are backed up.{% endif %}
@@ -49,11 +50,22 @@
       <legend>Forecast</legend>
       {% include "pestwatch/_field.html" with field=form.issue %}
     </fieldset>
+    <fieldset class="pw-fieldset" data-for="composites">
+      <legend>Months and datasets</legend>
+      <div class="row">
+        <div class="col-sm-6">{% include "pestwatch/_field.html" with field=form.month_from %}</div>
+        <div class="col-sm-6">{% include "pestwatch/_field.html" with field=form.month_to %}</div>
+      </div>
+      <div class="pw-checkbox-columns">{{ form.products }}</div>
+      <span class="help-block pw-help">{{ form.products.help_text }}</span>
+      {% include "pestwatch/_field.html" with field=form.force %}
+    </fieldset>
 
     <fieldset class="pw-fieldset">
       <legend>Counties</legend>
       <div class="pw-checkbox-columns">{{ form.counties }}</div>
-      <span class="help-block pw-help">{{ form.counties.help_text }}</span>
+      <span class="help-block pw-help">{{ form.counties.help_text }}
+        <span data-for="composites">The counties of the stored LSTM model are always included: it needs their composites.</span></span>
     </fieldset>
 
     <div class="pw-form-actions">

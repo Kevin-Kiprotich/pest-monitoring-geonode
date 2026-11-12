@@ -3,11 +3,11 @@
 The ``data/`` folder mirrors the modelling team's ``F:/VI_prediction`` layout, so
 the notebooks find their files with only the root folder changed:
 
-    data/HISTORICAL WEATHER/...          observed daily weather (fetched automatically)
+    data/HISTORICAL WEATHER/...          observed daily weather (history uploaded, then fetched daily)
     data/SRTM, SoilGrids, JRC_...        static layers (uploaded once by a manager)
-    data/<INDEX>/<County>/...            monthly vegetation indices (uploaded monthly)
-    data/Sentinel_AllBands_2024/...      monthly Sentinel-2 band stacks (uploaded monthly)
-    data/LANDSAT_STACK/<County>/...      monthly Landsat stacks (uploaded monthly)
+    data/<INDEX>/<County>/...            monthly vegetation indices (history uploaded, then Earth Engine)
+    data/Sentinel_AllBands_2024/...      monthly Sentinel-2 band stacks (history uploaded, then Earth Engine)
+    data/LANDSAT_STACK/<County>/...      monthly Landsat stacks (history uploaded, then Earth Engine)
     data/FORECASTED_WEATHER*/...         SEAS5 forecast, raw / bias-corrected / 30 m
     data/Incidence_data/...              field records (training only)
 
@@ -135,6 +135,10 @@ class Layout:
     def seas5_archive(self):
         return self.p("SEAS5_ARCHIVE", "daily")
 
+    def seas5_archive_file(self, year, month):
+        """The archived SEAS5 forecast that started on the first of ``month`` in ``year``."""
+        return os.path.join(self.seas5_archive, f"SEAS5_daily_{year:04d}-{month:02d}.nc")
+
     def fc_file(self, base, group, var, stat, county, day):
         return os.path.join(base, group, var, stat, f"{county}_{var}_{stat}_{day:%Y-%m-%d}.tif")
 
@@ -193,8 +197,22 @@ class Layout:
         return [p for p in PEST_ORDER if os.path.exists(self.pest_model(p, county))]
 
     @property
+    def lstm_models(self):
+        return self.p("models", "lstm")
+
+    @property
+    def lstm_model(self):
+        """The stored, trained LSTM (Notebook B's final_model.pt). It is used as is, never retrained."""
+        return os.path.join(self.lstm_models, "final_model.pt")
+
+    @property
+    def lstm_skill(self):
+        """Optional: Notebook B's test-skill table, only copied into the forecast summary."""
+        return os.path.join(self.lstm_models, "test_skill_observed_weather.csv")
+
+    @property
     def lstm_work(self):
-        """Notebooks A, A2, B and C's WORK_DIR (training dataset, stores, model)."""
+        """Notebooks A, A2 and C's WORK_DIR (dataset and stores, rebuilt from the latest inputs)."""
         return self.p("lstm", "work")
 
     def lstm_forecast(self, issue):

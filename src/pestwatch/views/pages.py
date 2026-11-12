@@ -62,4 +62,6 @@ def about(request):
             int(conf.get("SCHEDULE").get("nowcast", {}).get("weekday", 0))],
         "forecast_months": conf.get("FORECAST_MONTHS"),
         "map_day": conf.get("FORECAST_MAP_DAY"),
+        "fetch_from": conf.get("AUTO_FETCH_FROM"),
+        "archive_start_year": conf.get("SEAS5_ARCHIVE_START_YEAR"),
     })

@@ -1,15 +1,30 @@
-"""Model inputs that no download produces, which managers upload.
+"""Model inputs that managers upload.
 
-- static layers per county: DEM, soil, crop mask and crop type (once);
+History versus new data (``conf.AUTO_FETCH_FROM``): everything before that day is the
+modelling team's history and is uploaded here; from that day on, whatever Earth Engine
+or the Copernicus CDS can provide is downloaded by the pipelines.
+
+- static layers per county: DEM, soil, crop mask and crop type (once, upload only);
 - monthly satellite composites per county: vegetation indices, Sentinel-2 and
-  Landsat stacks (every month; the zips contain no script that makes them);
-- trained pest models (.joblib) per county;
-- pest incidence records (.csv), only used to retrain the pest models.
+  Landsat stacks. History: uploaded. From AUTO_FETCH_FROM: made in Earth Engine
+  every month by the "Satellite composites" pipeline (``pipeline/composites.py``).
+  A month can still be uploaded (e.g. one Earth Engine could not make), and an
+  uploaded file is never replaced by the automatic fetch;
+- observed daily weather per county (rainfall, max / min temperature, humidity,
+  wind). History: uploaded. From AUTO_FETCH_FROM: the Weather download pipeline;
+- the SEAS5 archive (past forecasts, for the bias correction; one file per year and
+  start month, for the whole area). History: uploaded. From AUTO_FETCH_FROM: each
+  forecast run adds its own start month from the CDS;
+- trained pest models (.joblib) per county (upload only);
+- pest incidence records (.csv), only used to retrain the pest models (upload only).
 
 Each file is checked and written to the exact path the notebooks read
-(``pipeline/layout.py``). Monthly datasets also accept a .zip of many months.
+(``pipeline/layout.py``). Monthly, daily and archive datasets also accept a .zip of
+many files, each named with its month or day.
 """
 import csv
+import datetime as dt
+import glob
 import io
 import os
 import re
@@ -20,7 +35,8 @@ from dataclasses import dataclass, field
 from osgeo import gdal
 
 from . import conf
-from .pipeline.layout import INDICES, PEST_ORDER, Layout, month_in_name, month_range
+from .pipeline.composites import EE_SOURCE, PRODUCT_KEYS, SOURCE_TAG, UPLOAD_SOURCE
+from .pipeline.layout import INDICES, PEST_ORDER, Layout, date_in_name, month_in_name, month_range
 
 gdal.UseExceptions()
 
@@ -36,19 +52,57 @@ class InputError(ValueError):
 class InputDataset:
     key: str
     label: str
-    group: str            # static | monthly | model | incidence
+    group: str            # static | monthly | weather | seas5 | model | incidence
     ext: tuple
     used_by: str
     needed_for: str       # nowcast, forecast, training
     bands: tuple = (1, 1)  # allowed band counts (min, max) for rasters
     pest: str = ""
     index: str = ""
+    var: str = ""         # weather variable (Layout.wx_dir)
     notes: str = ""
     example: str = field(default="")
 
     @property
     def monthly(self):
         return self.group == "monthly"
+
+    @property
+    def daily(self):
+        return self.group == "weather"
+
+    @property
+    def regional(self):
+        """One file set for the whole area, not per county (the SEAS5 archive)."""
+        return self.group == "seas5"
+
+    @property
+    def by_month(self):
+        """Files keyed by year and month (composites, SEAS5 archive start months)."""
+        return self.group in ("monthly", "seas5")
+
+    @property
+    def automatic(self):
+        """Fetched from Earth Engine by the Satellite composites pipeline (months from AUTO_FETCH_FROM)."""
+        return self.key in PRODUCT_KEYS
+
+    @property
+    def downloaded(self):
+        """History uploaded; new data downloaded from Earth Engine or the CDS."""
+        return self.group in ("monthly", "weather", "seas5")
+
+    @property
+    def arrives(self):
+        """How the dataset gets onto the server, in words."""
+        start = conf.get("AUTO_FETCH_FROM")
+        if self.group == "monthly":
+            return f"History before {start[:7]}: upload. From {start[:7]}: Earth Engine, every month."
+        if self.group == "weather":
+            src = "Earth Engine" if self.var in ("precip", "wind") else "Copernicus CDS"
+            return f"History before {start}: upload. From {start}: {src}, every day."
+        if self.group == "seas5":
+            return f"History (start months before {start[:7]}): upload. Later: Copernicus CDS, with each forecast."
+        return "Upload."
 
     def path(self, L, county, year=None, month=None):
         k = self.key
@@ -72,7 +126,17 @@ class InputDataset:
             return L.cwv_file(county, year, month)
         if k == "landsat":
             return L.landsat_file(county, year, month)
+        if k.startswith("wx_"):
+            day = year                       # daily datasets: path(L, county, date)
+            return os.path.join(L.wx_dir(self.var, county), L.wx_name(self.var, county, day))
+        if k == "seas5_archive":
+            return L.seas5_archive_file(year, month)
         raise KeyError(k)
+
+
+WEATHER = [("precip", "Rainfall", "CHIRPS, mm"), ("tmax", "Maximum temperature", "ERA5-Land, deg C"),
+           ("tmin", "Minimum temperature", "ERA5-Land, deg C"), ("rh", "Relative humidity", "ERA5, %"),
+           ("wind", "Wind", "ERA5-Land")]
 
 
 def _catalogue():
@@ -109,6 +173,18 @@ def _catalogue():
                      "Pest models (l.coastal, l.blue, l.lst), the LSTM, and the 30 m grid of the forecast", "nowcast, forecast",
                      bands=(3, 8), notes="Bands COASTAL, BLUE, LST_K (Kelvin), 30 m."),
     ]
+    for var, label, src in WEATHER:
+        d.append(InputDataset(f"wx_{var}", f"{label} (daily history)", "weather", (".tif", ".zip"),
+                              "Pest models (observed weather), SEAS5 bias correction, the LSTM", "nowcast, forecast",
+                              var=var, notes=f"One GeoTIFF per day ({src}), the day in the file name, e.g. "
+                                             f"{Layout.wx_name(var, 'Kakamega', dt.date(2023, 3, 4))}. "
+                                             "A .zip of many days is easiest."))
+    d.append(InputDataset("seas5_archive", "SEAS5 archive of past forecasts", "seas5", (".nc", ".zip"),
+                          "Bias correction of the SEAS5 forecast", "forecast",
+                          notes="One NetCDF per year and start month, SEAS5_daily_<YYYY-MM>.nc, with temp_c, rh_pct "
+                                "and wind_speed per ensemble member (dims number, date, latitude, longitude), "
+                                "covering every county. The years from "
+                                f"{conf.get('SEAS5_ARCHIVE_START_YEAR')} are used."))
     for p in PEST_ORDER:
         d.append(InputDataset(f"model_{p}", f"{PEST_NAMES[p]} model ({p}_model.joblib)", "model", (".joblib",),
                               "Pest risk prediction", "nowcast, forecast", pest=p,
@@ -123,8 +199,22 @@ def _catalogue():
 
 
 DATASETS = _catalogue()
-GROUPS = [("static", "Static layers (upload once)"), ("monthly", "Monthly satellite composites (upload every month)"),
+GROUPS = [("static", "Static layers (upload once)"),
+          ("monthly", "Monthly satellite composites (history uploaded; new months from Earth Engine)"),
+          ("weather", "Observed daily weather (history uploaded; new days from Earth Engine and the CDS)"),
+          ("seas5", "SEAS5 archive, all counties (history uploaded; new start months from the CDS)"),
           ("model", "Trained pest models"), ("incidence", "Pest incidence records (training only)")]
+
+
+def fetch_from():
+    """The first day the pipelines download; earlier data is the uploaded history."""
+    return dt.date.fromisoformat(conf.get("AUTO_FETCH_FROM"))
+
+
+def seas5_history_needed(start_year, first_fetch_day, months=range(1, 13)):
+    """(year, month) archive files that are history: start months before ``first_fetch_day``."""
+    return sorted((y, m) for m in months for y in range(start_year, first_fetch_day.year + 1)
+                  if dt.date(y, m, 1) < first_fetch_day)
 
 
 def layout():
@@ -148,26 +238,74 @@ def _months_present(ds, L, county):
     return sorted(out)
 
 
+def seas5_archive_present(L):
+    out = set()
+    for f in glob.glob(os.path.join(L.seas5_archive, "SEAS5_daily_*.nc")):
+        ym = month_in_name(f)
+        if ym:
+            out.add(ym)
+    return sorted(out)
+
+
+def _monthly_row(row, ds, L, county, last_complete):
+    months = _months_present(ds, L, county)
+    row["months"] = months
+    if not months:
+        row["detail"] = "none"
+        return
+    gaps = [ym for ym in month_range(months[0], last_complete) if ym not in set(months)]
+    row["ok"] = months[-1] >= last_complete
+    row["detail"] = (f"{len(months)} months, {months[0][0]}-{months[0][1]:02d} to {months[-1][0]}-{months[-1][1]:02d}"
+                     + (f"; {len(gaps)} missing" if gaps else ""))
+    row["latest"] = f"{months[-1][0]}-{months[-1][1]:02d}"
+    row["gaps"] = [f"{y}-{m:02d}" for y, m in gaps[-12:]]
+    row["latest_source"] = source_label(file_source(ds.path(L, county, *months[-1])))
+
+
+def _daily_row(row, ds, L, county, today, first_fetch):
+    """Weather: the uploaded history must run without gaps up to the day before AUTO_FETCH_FROM."""
+    days = sorted(L.wx_days(ds.var, county))
+    if not days:
+        row["detail"] = "none"
+        return
+    history_end = min(first_fetch, today) - dt.timedelta(days=1)
+    have = set(days)
+    gaps = [days[0] + dt.timedelta(days=i) for i in range((history_end - days[0]).days + 1)]
+    gaps = [d for d in gaps if d not in have]
+    row["ok"] = days[-1] >= history_end and not gaps
+    row["detail"] = f"{len(days)} days, {days[0]} to {days[-1]}" + (f"; {len(gaps)} history days missing" if gaps else "")
+    if days[-1] < history_end:
+        row["detail"] += f"; history should reach {history_end}"
+    row["latest"] = str(days[-1])
+    row["gaps"] = [str(d) for d in gaps[:12]]
+
+
+def _seas5_row(row, L, first_fetch):
+    present = seas5_archive_present(L)
+    needed = seas5_history_needed(conf.get("SEAS5_ARCHIVE_START_YEAR"), first_fetch)
+    missing = [ym for ym in needed if ym not in set(present)]
+    row["ok"] = not missing
+    row["detail"] = (f"{len(present)} start months" if present else "none") + \
+        (f"; {len(missing)} history files missing" if missing else "")
+    if present:
+        row["latest"] = f"{present[-1][0]}-{present[-1][1]:02d}"
+    row["gaps"] = [f"{y}-{m:02d}" for y, m in missing[:12]]
+
+
 def status(county, today):
     """One row per dataset for ``county``: what is there and what is missing."""
     L = layout()
     last_complete = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
+    first_fetch = fetch_from()
     rows = []
     for ds in DATASETS.values():
         row = dict(ds=ds, ok=False, detail="")
         if ds.monthly:
-            months = _months_present(ds, L, county)
-            row["months"] = months
-            if months:
-                start = months[0]
-                gaps = [ym for ym in month_range(start, last_complete) if ym not in set(months)]
-                row["ok"] = months[-1] >= last_complete
-                row["detail"] = (f"{len(months)} months, {months[0][0]}-{months[0][1]:02d} to {months[-1][0]}-{months[-1][1]:02d}"
-                                 + (f"; {len(gaps)} missing" if gaps else ""))
-                row["latest"] = f"{months[-1][0]}-{months[-1][1]:02d}"
-                row["gaps"] = [f"{y}-{m:02d}" for y, m in gaps[-12:]]
-            else:
-                row["detail"] = "none"
+            _monthly_row(row, ds, L, county, last_complete)
+        elif ds.daily:
+            _daily_row(row, ds, L, county, today, first_fetch)
+        elif ds.regional:
+            _seas5_row(row, L, first_fetch)
         else:
             p = ds.path(L, county)
             if os.path.exists(p):
@@ -220,7 +358,55 @@ def _check_joblib(path):
         raise InputError("This does not look like a joblib model file.")
 
 
-def _write(tmp, target):
+SEAS5_VARIABLES = ("temp_c", "rh_pct", "wind_speed")
+
+
+def _check_netcdf(path):
+    """A SEAS5 archive file: NetCDF (classic or NetCDF-4) holding the variables the bias correction reads."""
+    with open(path, "rb") as f:
+        head = f.read(8)
+    if not (head[:3] == b"CDF" or head == b"\x89HDF\r\n\x1a\n"):
+        raise InputError("This is not a NetCDF file.")
+    try:
+        r = gdal.Open(path)
+    except RuntimeError:
+        return                     # GDAL without the netCDF driver: the format check above has to do
+    if r is None:
+        return
+    names = {n.rsplit(":", 1)[-1] for n, _ in (r.GetSubDatasets() or [])}
+    if names:
+        missing = [v for v in SEAS5_VARIABLES if v not in names]
+        if missing:
+            raise InputError(f"The archive file lacks {', '.join(missing)} (it has {', '.join(sorted(names))}).")
+
+
+def file_source(path):
+    """Who made a monthly file: "earthengine", "upload", or "" (copied onto the server, e.g. the team's history)."""
+    try:
+        r = gdal.Open(path)
+        return (r.GetMetadataItem(SOURCE_TAG) or "") if r is not None else ""
+    except RuntimeError:
+        return ""
+
+
+def source_label(source):
+    return {EE_SOURCE: "Earth Engine", UPLOAD_SOURCE: "uploaded"}.get(source, "copied to the server")
+
+
+def _mark_uploaded(path):
+    """Tag an uploaded GeoTIFF, so the automatic Earth Engine fetch never replaces it."""
+    r = gdal.Open(path, gdal.GA_Update)
+    r.SetMetadataItem(SOURCE_TAG, UPLOAD_SOURCE)
+    r.FlushCache()
+    r = None
+
+
+def _write(tmp, target, ds=None):
+    if ds is not None and ds.monthly and tmp.lower().endswith(".tif"):
+        try:
+            _mark_uploaded(tmp)
+        except Exception:      # only a label: untagged files are never replaced by the fetch either
+            pass
     os.makedirs(os.path.dirname(target), exist_ok=True)
     os.replace(tmp, target)
 
@@ -232,10 +418,27 @@ def _validate(ds, path):
         _check_csv(path)
     elif path.lower().endswith(".joblib"):
         _check_joblib(path)
+    elif path.lower().endswith(".nc"):
+        _check_netcdf(path)
+
+
+def _key_in_name(ds, name):
+    """The date (daily datasets) or (year, month) a file name carries, or None."""
+    return date_in_name(name) if ds.daily else month_in_name(name)
+
+
+def _target(ds, L, county, key):
+    return ds.path(L, county, key) if ds.daily else ds.path(L, county, *key)
+
+
+NAME_HINT = {"monthly": "YYYY_MM (e.g. NDVI_Kakamega_2026_10.tif)", "seas5": "YYYY-MM (e.g. SEAS5_daily_2021-11.nc)",
+             "weather": "the day, YYYY_MM_DD, YYYY-MM-DD or YYYYMMDD (e.g. CHIRPS_Kakamega_2023_03_04.tif)"}
 
 
 def save_upload(ds, county, month, uploaded):
-    """Check ``uploaded`` and write it where the models read it. Returns (paths written, files skipped)."""
+    """Check ``uploaded`` and write it where the models read it. Returns (paths written, files skipped).
+
+    ``county`` is ignored for regional datasets (the SEAS5 archive)."""
     L = layout()
     name = uploaded.name
     ext = os.path.splitext(name)[1].lower()
@@ -250,15 +453,16 @@ def save_upload(ds, county, month, uploaded):
     try:
         if ext == ".zip":
             return _save_zip(ds, county, tmp, tmp_dir, L)
-        if ds.monthly:
-            ym = month or month_in_name(name)
-            if not ym:
-                raise InputError("Choose the month, or put it in the file name (e.g. NDVI_Kakamega_2026_10.tif).")
-            target = ds.path(L, county, *ym)
+        if ds.by_month or ds.daily:
+            key = (month if ds.by_month else None) or _key_in_name(ds, name)
+            if not key:
+                raise InputError(("Choose the month, or put it" if ds.by_month else "Put the day") +
+                                 f" in the file name: {NAME_HINT[ds.group]}.")
+            target = _target(ds, L, county, key)
         else:
             target = ds.path(L, county)
         _validate(ds, tmp)
-        _write(tmp, target)
+        _write(tmp, target, ds)
         return [target], []
     finally:
         if os.path.exists(tmp):
@@ -266,22 +470,24 @@ def save_upload(ds, county, month, uploaded):
 
 
 def _save_zip(ds, county, zpath, tmp_dir, L):
-    """Every .tif in the zip whose name carries a year and month (YYYY_MM) is written as that month."""
+    """Every file in the zip with the dataset's extension and a month (or day) in its name is written as that."""
     try:
         z = zipfile.ZipFile(zpath)
     except zipfile.BadZipFile:
         raise InputError("The zip file could not be opened.")
+    exts = tuple(e for e in ds.ext if e != ".zip")
     written, errors = [], []
     with z:
-        members = [m for m in z.infolist() if not m.is_dir() and m.filename.lower().endswith(".tif")]
+        members = [m for m in z.infolist() if not m.is_dir() and m.filename.lower().endswith(exts)]
         if not members:
-            raise InputError("The zip contains no .tif files.")
+            raise InputError(f"The zip contains no {' or '.join(exts)} files.")
         for m in members:
-            ym = month_in_name(m.filename)
-            if not ym:
-                errors.append(f"{os.path.basename(m.filename)}: no YYYY_MM in the name")
+            key = _key_in_name(ds, m.filename)
+            if not key:
+                errors.append(f"{os.path.basename(m.filename)}: no {NAME_HINT[ds.group].split(' (')[0]} in the name")
                 continue
-            tmp = os.path.join(tmp_dir, f"{uuid.uuid4().hex}.tif")
+            ext = os.path.splitext(m.filename)[1].lower()
+            tmp = os.path.join(tmp_dir, f"{uuid.uuid4().hex}{ext}")
             with z.open(m) as src, open(tmp, "wb") as dst:       # never extract by member name (zip slip)
                 while True:
                     chunk = src.read(1 << 20)
@@ -290,8 +496,8 @@ def _save_zip(ds, county, zpath, tmp_dir, L):
                     dst.write(chunk)
             try:
                 _validate(ds, tmp)
-                target = ds.path(L, county, *ym)
-                _write(tmp, target)
+                target = _target(ds, L, county, key)
+                _write(tmp, target, ds)
                 written.append(target)
             except InputError as e:
                 errors.append(f"{os.path.basename(m.filename)}: {e}")
