@@ -15,10 +15,12 @@
   </form>
   {% endif %}
 </div>
-<p class="text-muted pw-lead">The weather and the seasonal forecast are downloaded automatically. The datasets below are not:
-  no script in the model package produces them, so a manager uploads them here. Each file is checked and stored where the
-  models read it. Larger archives (e.g. years of past composites) can also be copied into <code>{{ data_root }}/data</code>
-  on the server in the same folder layout.</p>
+<p class="text-muted pw-lead">The weather and the seasonal forecast are downloaded automatically. The monthly satellite
+  composites are made in Google Earth Engine every month (Processes &gt; Satellite composites), with the modelling team's
+  recipes; they can also be uploaded here, e.g. the team's own history or a month Earth Engine could not make. An uploaded
+  file is never replaced by the automatic fetch. The other datasets are uploaded by a manager. Each file is checked and
+  stored where the models read it. Larger archives (e.g. years of past composites) can also be copied into
+  <code>{{ data_root }}/data</code> on the server in the same folder layout; those are kept as well.</p>
 
 {% if not county %}
 <div class="pw-empty-state"><p>No counties yet. Import the boundaries first (Layers &gt; Boundaries).</p></div>
@@ -27,20 +29,25 @@
 <h3>{{ g.title }}</h3>
 <div class="table-responsive">
 <table class="table pw-table pw-input-table">
-  <thead><tr><th>Dataset</th><th>Used by</th><th>Needed for</th><th>{{ county.name }}</th><th class="text-right"></th></tr></thead>
+  <thead><tr><th>Dataset</th><th>Used by</th><th>Needed for</th><th>How it arrives</th><th>{{ county.name }}</th><th class="text-right"></th></tr></thead>
   <tbody>
   {% for r in g.rows %}
     <tr>
       <td><strong>{{ r.ds.label }}</strong><div class="pw-subtle">{{ r.ds.notes }}</div></td>
       <td class="pw-subtle">{{ r.ds.used_by }}</td>
       <td class="pw-subtle">{{ r.ds.needed_for }}</td>
+      <td class="pw-subtle">{% if r.ds.automatic %}<strong>Earth Engine</strong>, every month{% if composites_when %} ({{ composites_when }}){% endif %}, or upload{% else %}Upload{% endif %}</td>
       <td>
         <span class="pw-status {% if r.ok %}pw-status-ready{% elif r.detail == 'missing' or r.detail == 'none' %}pw-status-failed{% else %}pw-status-pending{% endif %}">
           {% if r.ok %}{% if r.ds.monthly %}Up to date{% else %}Present{% endif %}{% elif r.detail == 'missing' or r.detail == 'none' %}Missing{% else %}Behind{% endif %}</span>
         <div class="pw-subtle">{{ r.detail }}</div>
+        {% if r.latest_source %}<div class="pw-subtle">Latest ({{ r.latest }}): {{ r.latest_source }}</div>{% endif %}
         {% if r.gaps %}<div class="pw-subtle" title="{{ r.gaps|join:', ' }}">Missing: {{ r.gaps|slice:":6"|join:", " }}{% if r.gaps|length > 6 %} …{% endif %}</div>{% endif %}
       </td>
-      <td class="text-right">{% if perms.pestwatch.add_inputupload %}<a class="btn btn-xs btn-default" href="{% url 'pestwatch:input_upload' r.ds.key %}?county={{ county.pk }}"><i class="fa fa-upload"></i> Upload</a>{% endif %}</td>
+      <td class="text-right pw-nowrap">
+        {% if r.ds.automatic and perms.pestwatch.add_pipelinerun %}<a class="btn btn-xs btn-default" title="Make this dataset in Earth Engine for {{ county.name }}" href="{% url 'pestwatch:process_start' %}?pipeline=composites&amp;product={{ r.ds.key }}&amp;county={{ county.name|urlencode }}"><i class="fa fa-cloud-download"></i> Fetch</a>{% endif %}
+        {% if perms.pestwatch.add_inputupload %}<a class="btn btn-xs btn-default" href="{% url 'pestwatch:input_upload' r.ds.key %}?county={{ county.pk }}"><i class="fa fa-upload"></i> Upload</a>{% endif %}
+      </td>
     </tr>
   {% endfor %}
   </tbody>

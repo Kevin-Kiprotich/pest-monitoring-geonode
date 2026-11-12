@@ -24,15 +24,18 @@ from django.utils import timezone
 from . import conf, services
 from .models import (AdminBoundary, AdminLevel, LayerStatus, Pest, PestLayer, PestStyle, Pipeline, PipelineRun,
                      PipelineStep, ProductType, RunStatus, RunTrigger, StepStatus, TemporalType)
+from .pipeline import composites
 from .pipeline.layout import Layout, PEST_ORDER, add_months, issue_months
 
 logger = logging.getLogger(__name__)
 
 PIPELINES = {
     Pipeline.WEATHER: ["fetch_chirps", "fetch_era5_temp", "fetch_era5_rh", "fetch_era5_wind"],
+    Pipeline.COMPOSITES: ["fetch_s2_bands", "fetch_s2_cwv", "fetch_landsat", "fetch_indices"],
     Pipeline.NOWCAST: ["pest_nowcast", "publish"],
+    # The stored LSTM (models/lstm/final_model.pt) is used as is: no training step.
     Pipeline.FORECAST: ["fetch_seas5", "bias_correct", "downscale_30m", "lstm_dataset", "lstm_stores",
-                        "lstm_train", "lstm_forecast", "pest_forecast", "publish"],
+                        "lstm_forecast", "pest_forecast", "publish"],
     Pipeline.TRAINING: ["pest_train"],
 }
 
@@ -41,13 +44,17 @@ STEP_LABELS = {
     "fetch_era5_temp": "Download ERA5-Land max/min temperature (CDS)",
     "fetch_era5_rh": "Download ERA5 relative humidity (CDS)",
     "fetch_era5_wind": "Download ERA5-Land wind (Earth Engine)",
+    "fetch_s2_bands": "Sentinel-2 band stack (Earth Engine)",
+    "fetch_s2_cwv": "Sentinel-2 coastal and water vapour (Earth Engine)",
+    "fetch_landsat": "Landsat stack (Earth Engine)",
+    "fetch_indices": "Vegetation index composites (Earth Engine)",
     "fetch_seas5": "Download the SEAS5 seasonal forecast (CDS)",
     "bias_correct": "Bias-correct SEAS5 against observed weather",
     "downscale_30m": "Downscale the forecast to 30 m with the DEM",
-    "lstm_dataset": "LSTM A: build the training dataset",
+    "lstm_dataset": "LSTM A: build the input dataset from the latest months",
     "lstm_stores": "LSTM A2: build the full-area stores",
-    "lstm_train": "LSTM B: train the vegetation index model",
-    "lstm_forecast": "LSTM C: forecast vegetation indices (7 months)",
+    "lstm_train": "LSTM B: skipped (the stored model is used)",
+    "lstm_forecast": "LSTM C: forecast vegetation indices with the stored model (7 months)",
     "pest_nowcast": "Pest models: map current risk",
     "pest_forecast": "Pest models: map forecast risk",
     "pest_train": "Pest models: retrain from incidence records",
@@ -90,6 +97,11 @@ def default_params(pipeline, today=None):
         return dict(counties=counties, start=str(start), end=str(today))
     if pipeline == Pipeline.NOWCAST:
         return dict(counties=counties, map_dates=[])
+    if pipeline == Pipeline.COMPOSITES:
+        # The month that just ended, and the months before it whose gap filling can now use later months.
+        last = composites.month_add(f"{today:%Y-%m}", -1)
+        refresh = [composites.month_add(last, -i) for i in range(conf.get("COMPOSITE_REFRESH_MONTHS"), 0, -1)]
+        return dict(counties=counties, months=[last], refresh=refresh)
     if pipeline == Pipeline.FORECAST:
         return dict(counties=counties, issue=f"{today:%Y-%m}")
     return dict(counties=counties)
@@ -139,9 +151,11 @@ def check_ready(pipeline, params):
     needs_cds = pipeline in (Pipeline.WEATHER, Pipeline.FORECAST)
     if needs_cds and not creds["cds"]:
         problems.append("The Copernicus CDS key is not set (CDS_API_KEY in .env).")
-    if pipeline == Pipeline.WEATHER and not creds["gee"]:
+    if pipeline in (Pipeline.WEATHER, Pipeline.COMPOSITES) and not creds["gee"]:
         problems.append("The Earth Engine service-account key is missing (PESTWATCH_GEE_KEY_FILE in .env, "
                         "key file in ./secrets).")
+    if pipeline == Pipeline.COMPOSITES and not params.get("months") and not params.get("refresh"):
+        problems.append("No months chosen.")
     if pipeline == Pipeline.NOWCAST:
         no_wx = [c for c in counties if not L.wx_days("tmax", c)]
         if no_wx:
@@ -150,6 +164,8 @@ def check_ready(pipeline, params):
         no_dem = [c for c in counties if not os.path.exists(L.dem(c))]
         if no_dem:
             problems.append(f"Elevation (DEM) missing for {', '.join(no_dem)}.")
+    if pipeline == Pipeline.FORECAST and not os.path.exists(L.lstm_model):
+        problems.append(f"The trained LSTM model is missing: put final_model.pt in {L.lstm_models}.")
     if pipeline == Pipeline.FORECAST and params.get("issue"):
         y, m = map(int, params["issue"].split("-"))
         py, pm = add_months(y, m, -1)
@@ -277,6 +293,8 @@ def _summary(name, result):
         return f"{len(result['outputs'])} maps produced"
     if name == "publish":
         return f"{result.get('published', 0)} layers published"
+    if "counts" in result:
+        return ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in result["counts"].items())
     return ""
 
 
@@ -291,6 +309,9 @@ def spec_for(run, st, L):
         refresh_days=conf.get("CHIRPS_REFRESH_DAYS"), archive_start_year=conf.get("SEAS5_ARCHIVE_START_YEAR"),
         forecast_months=conf.get("FORECAST_MONTHS"), map_day=conf.get("FORECAST_MAP_DAY"),
         crop_season=conf.get("CROP_SEASON"), clean_tile_cache=conf.get("LSTM_CLEAN_TILE_CACHE"),
+        months=p.get("months") or [], refresh=p.get("refresh") or [], products=p.get("products") or [],
+        force=bool(p.get("force")), composite_threads=conf.get("COMPOSITE_THREADS"),
+        ndmi_recipe=conf.get("NDMI_RECIPE"),
         result_path=os.path.join(run_dir, f"{st.position:02d}_{st.name}.result.json"),
     )
     if st.name == "pest_nowcast" and not spec["map_dates"]:

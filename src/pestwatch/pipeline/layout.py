@@ -193,8 +193,22 @@ class Layout:
         return [p for p in PEST_ORDER if os.path.exists(self.pest_model(p, county))]
 
     @property
+    def lstm_models(self):
+        return self.p("models", "lstm")
+
+    @property
+    def lstm_model(self):
+        """The stored, trained LSTM (Notebook B's final_model.pt). It is used as is, never retrained."""
+        return os.path.join(self.lstm_models, "final_model.pt")
+
+    @property
+    def lstm_skill(self):
+        """Optional: Notebook B's test-skill table, only copied into the forecast summary."""
+        return os.path.join(self.lstm_models, "test_skill_observed_weather.csv")
+
+    @property
     def lstm_work(self):
-        """Notebooks A, A2, B and C's WORK_DIR (training dataset, stores, model)."""
+        """Notebooks A, A2 and C's WORK_DIR (dataset and stores, rebuilt from the latest inputs)."""
         return self.p("lstm", "work")
 
     def lstm_forecast(self, issue):

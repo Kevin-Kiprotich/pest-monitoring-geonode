@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 
+import composites
 import nbrun
 import seas5
 from layout import Layout, PEST_ORDER, add_months, cwv_folder, issue_months, month_end, month_range
@@ -216,6 +217,60 @@ def fetch_era5_wind(spec, L):
     return dict(wind=check_days(L, "wind", spec["counties"], start, min(end, last), "ERA5-Land wind"))
 
 
+# --- monthly satellite composites (Earth Engine) -----------------------------------------
+
+def _composite_counties(spec, L):
+    """The run's counties plus the stored LSTM's: it needs the composites of all its counties."""
+    counties = list(spec["counties"])
+    if os.path.exists(L.lstm_model):
+        counties += [c for c in _lstm_cfg(L)["COUNTIES"] if c not in counties]
+    return counties
+
+
+def _fetch_composites(spec, L, step_name):
+    keys = [k for k in composites.STEP_PRODUCTS[step_name] if not spec.get("products") or k in spec["products"]]
+    if not keys:
+        raise StepSkipped("Not selected for this run.")
+    report = composites.run(
+        L, keys, _composite_counties(spec, L), spec.get("months") or [], spec.get("refresh") or [],
+        force=bool(spec.get("force")), key_file=spec.get("gee_key_file"), project=spec.get("gee_project"),
+        threads=int(spec.get("composite_threads") or 4), ndmi_recipe=spec.get("ndmi_recipe") or "median_qa",
+        done_file=os.path.join(spec["run_dir"], f"{step_name}.done.json"), log=log)
+    counts = {k: len(v) for k, v in report.items() if v}
+    log(f"{step_name}: {json.dumps(counts)}")
+    for k in ("low_coverage", "no_scenes", "no_boundary", "failed"):
+        for item in report[k][:50]:
+            log(f"  {k}: {item}")
+    if report["failed"]:
+        raise RuntimeError(f"{len(report['failed'])} composite(s) could not be downloaded (finished ones are kept; "
+                           f"retry the run): {report['failed'][0]}")
+    if not report["written"]:
+        raise StepSkipped("Nothing new: " + (", ".join(f"{n} {k.replace('_', ' ')}" for k, n in counts.items())
+                                             or "no months to fetch"))
+    return dict(counts=counts, written=report["written"], low_coverage=report["low_coverage"],
+                no_boundary=report["no_boundary"])
+
+
+@step("fetch_s2_bands")
+def fetch_s2_bands(spec, L):
+    return _fetch_composites(spec, L, "fetch_s2_bands")
+
+
+@step("fetch_s2_cwv")
+def fetch_s2_cwv(spec, L):
+    return _fetch_composites(spec, L, "fetch_s2_cwv")
+
+
+@step("fetch_landsat")
+def fetch_landsat(spec, L):
+    return _fetch_composites(spec, L, "fetch_landsat")
+
+
+@step("fetch_indices")
+def fetch_indices(spec, L):
+    return _fetch_composites(spec, L, "fetch_indices")
+
+
 # --- forecast weather -------------------------------------------------------------
 
 def _issue_dates(spec):
@@ -266,43 +321,89 @@ def _cwv_dirs(counties):
     return {c: cwv_folder(c) for c in counties}
 
 
+# The LSTM is not retrained: the stored final_model.pt (L.lstm_model) is fed the latest inputs.
+# Notebooks A and A2 rebuild the dataset and the stores up to the month before the forecast;
+# Notebook C runs the stored model on them.
+
+def _lstm_cfg(L):
+    """The stored model's settings (counties, months, ...), read from final_model.pt."""
+    import torch
+    if not os.path.exists(L.lstm_model):
+        raise RuntimeError(f"No LSTM model at {L.lstm_model}: put the trained final_model.pt there.")
+    return torch.load(L.lstm_model, map_location="cpu", weights_only=False)["cfg"]
+
+
+def _extend_model_months(art, data_npz):
+    """Let the stored model run on months after the ones it was trained on.
+
+    Notebook C requires the dataset and the stores to cover exactly the model's months
+    (cfg["MONTHS"]), which only holds when the model is retrained every cycle. The model's
+    climatology and normalisation only use months up to cfg["clim_end"], so newer months
+    change nothing it learned: they are only the encoder's recent history. The model's
+    months are extended with the dataset's, provided the dataset starts with exactly the
+    months the model was trained on.
+    """
+    import numpy as np
+    trained = [str(m) for m in art["cfg"]["MONTHS"]]
+    with np.load(data_npz, allow_pickle=False) as D:
+        months = [str(m) for m in D["months"]]
+    if months[:len(trained)] != trained:
+        raise RuntimeError(f"The LSTM dataset covers {months[0]}..{months[-1]}, but the stored model needs it to start "
+                           f"with its training months {trained[0]}..{trained[-1]} (clim_end {art['cfg']['clim_end']}).")
+    log(f"Stored LSTM (trained {art['cfg']['trained']} on {trained[0]}..{trained[-1]}) "
+        f"fed {len(months) - len(trained)} newer month(s), up to {months[-1]}")
+    art["cfg"]["MONTHS"] = months
+    return art
+
+
 @step("lstm_dataset")
 def lstm_dataset(spec, L):
+    cfg = _lstm_cfg(L)
     ey, em = _lstm_end_month(spec)
+    end = f"{ey:04d}-{em:02d}"
+    if end < cfg["MONTHS"][-1]:
+        raise RuntimeError(f"The forecast issued {spec['issue']} starts before the end of the stored model's "
+                           f"training months ({cfg['MONTHS'][-1]}).")
     os.makedirs(L.lstm_work, exist_ok=True)
+    # The model's counties, in its order: its county one-hot and climatology groups depend on it.
+    counties = list(cfg["COUNTIES"])
     nbrun.run(nb("lstm_a_dataset"), cells=[1, 3, 5, 7, 9, 12, 14, 18], params=dict(
-        COUNTIES=spec["counties"], VI_ROOT=L.data, CWV_DIR=_cwv_dirs(spec["counties"]), HIST_ROOT=L.hist,
+        COUNTIES=counties, VI_ROOT=L.data, CWV_DIR=_cwv_dirs(counties), HIST_ROOT=L.hist,
         IN_DIR=L.fc_bc, FC30_DIR=L.fc_30m, DEM_PATH=L.dem_pattern, WORK_DIR=L.lstm_work,
-        START_MONTH=spec.get("lstm_start_month", "2020-01"), END_MONTH=f"{ey:04d}-{em:02d}"))
-    return dict(end_month=f"{ey:04d}-{em:02d}")
+        START_MONTH=cfg["MONTHS"][0], END_MONTH=end))
+    return dict(end_month=end, counties=counties)
 
 
 @step("lstm_stores")
 def lstm_stores(spec, L):
+    counties = list(_lstm_cfg(L)["COUNTIES"])
     nbrun.run(nb("lstm_a2_stores"), cells=[1, 3, 5, 7, 8, 10, 13, 15], params=dict(
-        WORK_DIR=L.lstm_work, VI_ROOT=L.data, CWV_DIR=_cwv_dirs(spec["counties"]), HIST_ROOT=L.hist,
+        WORK_DIR=L.lstm_work, VI_ROOT=L.data, CWV_DIR=_cwv_dirs(counties), HIST_ROOT=L.hist,
         IN_DIR=L.fc_bc, SCENARIOS=["mean"], REBUILD_COARSE=True))
     return {}
 
 
 @step("lstm_train")
 def lstm_train(spec, L):
-    # Notebook C requires the model's months to match the stores, so the LSTM is refitted
-    # every forecast cycle (see the tracker, issue I04).
-    nbrun.run(nb("lstm_b_train"), cells=[1, 3, 5, 7, 9, 11, 12, 18], params=dict(WORK_DIR=L.lstm_work))
-    model = os.path.join(L.lstm_work, "model", "final_model.pt")
-    if not os.path.exists(model):
-        raise RuntimeError(f"Notebook B finished but {model} was not written")
-    return dict(model=model)
+    # No longer part of the forecast pipeline; kept so runs queued before the change still finish.
+    raise StepSkipped(f"The stored LSTM model ({L.lstm_model}) is used; it is not retrained.")
 
 
 @step("lstm_forecast")
 def lstm_forecast(spec, L):
+    model_counties = list(_lstm_cfg(L)["COUNTIES"])
+    counties = [c for c in spec["counties"] if c in model_counties]
+    if not counties:
+        raise RuntimeError(f"The stored LSTM covers {', '.join(model_counties)}; none of {', '.join(spec['counties'])}.")
     out = L.lstm_forecast(spec["issue"])
     os.makedirs(out, exist_ok=True)
-    nbrun.run(nb("lstm_c_forecast"), cells=[1, 3, 5, 7, 9, 11, 13, 15, 20, 22], params=dict(
-        WORK_DIR=L.lstm_work, OUT_DIR=out, TILE_CACHE=os.path.join(out, "tile_cache"), FULL_SCENARIOS=["mean"],
-        COUNTIES_TO_RUN=spec["counties"], FORCE_RECOMPUTE=False, DELETE_TILE_CACHE=False))
+    ns = nbrun.new_namespace(nb("lstm_c_forecast"))
+    ns["_extend_model_months"] = _extend_model_months
+    nbrun.run(nb("lstm_c_forecast"), cells=[1, 3, 5, 7, 9, 11, 13, 15, 20, 22], ns=ns, params=dict(
+        WORK_DIR=L.lstm_work, MODEL_PATH=L.lstm_model, SKILL_CSV=L.lstm_skill,
+        art=nbrun.Expr("_extend_model_months(art, DATA_NPZ)"),
+        OUT_DIR=out, TILE_CACHE=os.path.join(out, "tile_cache"), FULL_SCENARIOS=["mean"],
+        COUNTIES_TO_RUN=counties, FORCE_RECOMPUTE=False, DELETE_TILE_CACHE=False))
     tiffs = glob.glob(os.path.join(L.lstm_geotiff(spec["issue"]), "mean", "*", "*.tif"))
     if not tiffs:
         raise RuntimeError(f"Notebook C wrote no GeoTIFFs to {L.lstm_geotiff(spec['issue'])}")

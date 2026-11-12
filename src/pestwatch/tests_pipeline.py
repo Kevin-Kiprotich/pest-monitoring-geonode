@@ -9,13 +9,14 @@ import shutil
 import tempfile
 import zipfile
 from types import SimpleNamespace
+from unittest import mock as unittest_mock
 
 import numpy as np
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, override_settings
 
 from pestwatch.pipeline import layout as lay
-from pestwatch.pipeline import nbrun, seas5
+from pestwatch.pipeline import composites, nbrun, seas5
 from pestwatch.tests import write_tif
 
 
@@ -179,6 +180,19 @@ class InputUploadTests(SimpleTestCase):
         self.assertEqual(len(skipped), 1)
         self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.root), "evil")))
 
+    def test_uploaded_composite_is_tagged_and_kept_by_the_fetch(self):
+        from pestwatch import inputs
+        written, _ = inputs.save_upload(inputs.DATASETS["index_NDVI"], "Kakamega", (2026, 10),
+                                        SimpleUploadedFile("ndvi.tif", self.tif_bytes()))
+        self.assertEqual(inputs.file_source(written[0]), composites.UPLOAD_SOURCE)
+        rows = {r["ds"].key: r for r in inputs.status("Kakamega", dt.date(2026, 11, 10))}
+        self.assertEqual(rows["index_NDVI"]["latest_source"], "uploaded")
+        self.assertTrue(rows["index_NDVI"]["ds"].automatic)
+        self.assertFalse(rows["dem"]["ds"].automatic)
+        # neither a refresh nor a forced fetch replaces it
+        src = inputs.file_source(written[0])
+        self.assertFalse(composites.decide(True, src, refresh=True, force=True))
+
     def test_csv_and_extension_checks(self):
         from pestwatch import inputs
         with self.assertRaisesRegex(inputs.InputError, "longitude and latitude"):
@@ -186,6 +200,79 @@ class InputUploadTests(SimpleTestCase):
                                SimpleUploadedFile("faw.csv", b"lon,lat,date\n34,0.2,2024-01-01\n"))
         with self.assertRaisesRegex(inputs.InputError, ".joblib"):
             inputs.save_upload(inputs.DATASETS["model_FAW"], "Kakamega", None, SimpleUploadedFile("faw.pkl", b"x"))
+
+
+class CompositeTests(SimpleTestCase):
+    """The parts of the Earth Engine composites that do not need Earth Engine."""
+
+    def test_products_cover_the_monthly_datasets(self):
+        from pestwatch import inputs
+        monthly = {k for k, d in inputs.DATASETS.items() if d.monthly}
+        self.assertEqual(set(composites.PRODUCT_KEYS), monthly)
+        self.assertEqual({k for ks in composites.STEP_PRODUCTS.values() for k in ks}, monthly)
+        L = lay.Layout("/r")
+        for key, p in composites.products().items():
+            self.assertEqual(p.path(L, "Kakamega", 2026, 10), inputs.DATASETS[key].path(L, "Kakamega", 2026, 10))
+
+    def test_recipes_follow_the_notebooks(self):
+        p = composites.products()
+        self.assertEqual(p["s2_bands"].bands, ["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12", "fill_flag"])
+        self.assertEqual((p["s2_bands"].scale, p["s2_cwv"].scale), (10, 60))
+        self.assertEqual(p["s2_cwv"].bands, ["B1", "B9", "fill_flag"])
+        self.assertEqual(p["index_MCARI"].bands, ["MCARI", "QA"])
+        self.assertEqual(p["landsat"].bands, ["COASTAL", "BLUE", "LST_K"])
+        self.assertEqual({k: v.recipe for k, v in p.items() if v.recipe == "median_qa"},
+                         {"index_MCARI": "median_qa", "index_NDMI": "median_qa"})
+        self.assertEqual(composites.products("monthly_mean")["index_NDMI"].bands, ["NDMI"])
+        # 2024 is not in the Sentinel-2 / TOP10 histories, but is in the coastal / water vapour and MCARI ones
+        self.assertIn(2024, p["s2_bands"].skip_years)
+        self.assertIn(2024, p["index_NDVI"].skip_years)
+        self.assertNotIn(2024, p["s2_cwv"].skip_years)
+        self.assertNotIn(2024, p["index_MCARI"].skip_years)
+
+    def test_months_and_donors(self):
+        self.assertEqual(composites.month_add("2026-01", -1), "2025-12")
+        self.assertEqual(composites.month_add("2025-11", 3), "2026-02")
+        self.assertEqual(composites.month_span("2025-11", "2026-02"), ["2025-11", "2025-12", "2026-01", "2026-02"])
+        have = ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-10", "2026-12"]
+        # nearest first, ties earlier first, at most 6, only within +/-3 months, never the month itself
+        self.assertEqual(composites.donor_months("2026-07", have),
+                         ["2026-06", "2026-08", "2026-05", "2026-04", "2026-10"])
+        self.assertEqual(len(composites.donor_months("2026-07", have, max_n=2)), 2)
+
+    def test_grid_utm_and_windows(self):
+        self.assertEqual(composites.utm_epsg(34.8, 0.3), 32636)       # Kakamega
+        self.assertEqual(composites.utm_epsg(39.8, -3.5), 32737)      # Kilifi
+        self.assertEqual(composites.utm_epsg(36.9, -0.4), 32737)      # Nyeri
+        self.assertEqual(composites.grid((101.0, 205.0, 159.0, 290.0), 10), (100, 290, 6, 9))
+        self.assertEqual(composites.grid((100.0, 200.0, 160.0, 290.0), 10), (100, 290, 6, 9))
+        tiles = composites.windows(5, 3, 2)
+        self.assertEqual(tiles, [(0, 0, 2, 2), (0, 2, 2, 2), (0, 4, 2, 1), (2, 0, 1, 2), (2, 2, 1, 2), (2, 4, 1, 1)])
+
+    def test_overwrite_rule(self):
+        ee, up = composites.EE_SOURCE, composites.UPLOAD_SOURCE
+        self.assertTrue(composites.decide(False, "", False, False))        # missing: fetch
+        self.assertFalse(composites.decide(True, ee, False, False))        # fetched before: keep
+        self.assertTrue(composites.decide(True, ee, True, False))          # fetched before, refresh month: again
+        self.assertTrue(composites.decide(True, ee, False, True))          # forced
+        self.assertFalse(composites.decide(True, up, True, True))          # uploaded: never
+        self.assertFalse(composites.decide(True, "", True, True))          # copied onto the server: never
+
+    def test_default_months_and_form_params(self):
+        from pestwatch import orchestrator
+        from pestwatch.forms import StartRunForm
+        with override_settings(PESTWATCH_COMPOSITE_REFRESH_MONTHS=3), \
+                unittest_mock.patch.object(orchestrator, "counties_with_models", return_value=["Kakamega"]):
+            p = orchestrator.default_params("composites", dt.date(2026, 1, 3))
+            self.assertEqual(p, dict(counties=["Kakamega"], months=["2025-12"],
+                                     refresh=["2025-09", "2025-10", "2025-11"]))
+            with unittest_mock.patch("pestwatch.forms._model_county_choices", return_value=[("Kakamega", "Kakamega")]):
+                form = StartRunForm(dict(pipeline="composites", month_from="2026-08", month_to="2026-10",
+                                         products=["index_NDVI", "landsat"], force="on"))
+                self.assertTrue(form.is_valid(), form.errors)
+                p = form.params()
+        self.assertEqual(p["months"], ["2026-08", "2026-09", "2026-10"])
+        self.assertEqual((p["refresh"], p["products"], p["force"]), ([], ["index_NDVI", "landsat"], True))
 
 
 def fake_run(status, attempts=1, finished=None, pk=1, message="boom"):

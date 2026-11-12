@@ -49,7 +49,7 @@ DEFAULTS = {
     "MODELS_PYTHON": os.getenv("PESTWATCH_MODELS_PYTHON", "/opt/pestmodels/bin/python"),
     # Counties the models run for. None = every county that has pest models uploaded.
     "MODEL_COUNTIES": None,
-    # Google Earth Engine service account (CHIRPS rainfall and ERA5-Land wind).
+    # Google Earth Engine service account (CHIRPS rainfall, ERA5-Land wind, satellite composites).
     "GEE_KEY_FILE": os.getenv("PESTWATCH_GEE_KEY_FILE", ""),
     "GEE_PROJECT": os.getenv("PESTWATCH_GEE_PROJECT", ""),
     # Copernicus Climate Data Store (ERA5 temperature and humidity, SEAS5).
@@ -66,9 +66,19 @@ DEFAULTS = {
     "FORECAST_MONTHS": 7,
     "FORECAST_MAP_DAY": 15,       # each forecast month is mapped for this day
     "CROP_SEASON": "Long_Rain2023",
+    # Monthly satellite composites from Earth Engine (pipeline/composites.py). Each run fetches the
+    # month that just ended and re-fetches the REFRESH months before it that Earth Engine made: their
+    # gap filling borrows from later months (up to +/-3 months for the TOP10 recipe), which only
+    # exist once those months are over. Uploaded files are never replaced.
+    "COMPOSITE_REFRESH_MONTHS": 3,
+    "COMPOSITE_THREADS": 4,       # parallel tile downloads (Earth Engine high-volume endpoint)
+    # Recipe of the NDMI history: "median_qa" (the NDMI "monthly fast" notebook, with a QA band) or
+    # "monthly_mean" (the TOP10 engine). Confirm with the modelling team.
+    "NDMI_RECIPE": "median_qa",
     # When the system starts each pipeline on its own (UTC).
     "SCHEDULE": {
         "weather": {"hour": 3},                    # every day
+        "composites": {"day": 3, "hour": 1},       # every month, for the month that just ended
         "nowcast": {"weekday": 0, "hour": 5},      # every Monday (0 = Monday)
         "forecast": {"day": 6, "hour": 6},         # every month, once SEAS5 is out (released on the 5th)
     },

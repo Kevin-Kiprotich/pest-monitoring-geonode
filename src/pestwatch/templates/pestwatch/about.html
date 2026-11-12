@@ -91,7 +91,7 @@
         <tr><td>Relative humidity</td><td>ERA5 (ECMWF), from temperature and dewpoint</td><td>~28 km, daily</td><td>Automatic (Copernicus CDS)</td></tr>
         <tr><td>Wind</td><td>ERA5-Land (ECMWF)</td><td>~11 km, daily</td><td>Automatic (Google Earth Engine)</td></tr>
         <tr><td>Seasonal forecast</td><td>SEAS5 (ECMWF), 51 ensemble members</td><td>~1°, 7 months ahead</td><td>Automatic (Copernicus CDS), monthly</td></tr>
-        <tr><td>Vegetation indices, Sentinel-2, Landsat</td><td>Monthly satellite composites</td><td>10-30 m</td><td>Uploaded monthly by managers</td></tr>
+        <tr><td>Vegetation indices, Sentinel-2, Landsat</td><td>Monthly satellite composites (the modelling team's recipes)</td><td>10-60 m</td><td>Automatic (Google Earth Engine), monthly; can also be uploaded</td></tr>
         <tr><td>Elevation, soil, crop type</td><td>SRTM, ISRIC SoilGrids, JRC crop maps</td><td>30-250 m</td><td>Uploaded once</td></tr>
         <tr><td>Pest records</td><td>Field surveys</td><td>points</td><td>Uploaded; used to train the models</td></tr>
       </tbody>
@@ -150,7 +150,9 @@
         forecast month, or retrain the pest models after uploading new incidence records.</li>
       <li><strong>Pause</strong> an automatic schedule, e.g. during maintenance.</li>
       <li><strong>Upload</strong> what no download produces on <a href="{% url 'pestwatch:input_list' %}">Input data</a>:
-        static layers once, satellite composites every month, trained models and incidence records.</li>
+        static layers once, trained models and incidence records. The satellite composites are made in Earth Engine
+        every month; a composite can still be uploaded (e.g. the team's history, or a month Earth Engine could not make),
+        and an uploaded file is never replaced by the automatic fetch.</li>
       <li>Model layers appear under Layers like uploaded ones; they can be hidden or deleted there.</li>
     </ul>
 
@@ -161,8 +163,9 @@
       <li>Copernicus CDS: set <code>CDS_API_KEY</code> (and <code>CDS_API_URL</code>) in <code>.env</code>, then log in to the CDS
         website once and accept the licences of <em>derived-era5-land-daily-statistics</em>,
         <em>derived-era5-single-levels-daily-statistics</em> and <em>seasonal-original-single-levels</em>.</li>
-      <li>Upload, for each county: the DEM, soil and crop layers, the pest models, and the monthly composites (at least the
-        last 12 months for the forecast).</li>
+      <li>Upload, for each county: the DEM, soil and crop layers and the pest models. Upload the modelling team's monthly
+        composites from 2020-01 to the last month the LSTM was trained on (its pixel climatology is computed from them);
+        later months are made in Earth Engine.</li>
       <li>Optionally copy the existing weather archive into the data folder to avoid downloading years of history.</li>
     </ol>
     {% endif %}

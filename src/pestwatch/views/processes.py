@@ -79,7 +79,11 @@ def process_status(request, pk):
 @perm("add_pipelinerun")
 def process_start(request):
     form = StartRunForm(request.POST or None, initial={"pipeline": request.GET.get("pipeline", "nowcast"),
-                                                       "issue": f"{timezone.now():%Y-%m}"})
+                                                       "issue": f"{timezone.now():%Y-%m}",
+                                                       "products": request.GET.getlist("product"),
+                                                       "counties": request.GET.getlist("county"),
+                                                       "month_from": request.GET.get("month", ""),
+                                                       "month_to": request.GET.get("month", "")})
     problems = []
     if request.method == "POST" and form.is_valid():
         params = form.params()
@@ -147,7 +151,8 @@ def input_list(request):
             groups.append(dict(key=key, title=title, rows=[r for r in rows if r["ds"].group == key]))
     uploads = InputUpload.objects.select_related("county", "uploaded_by")[:30]
     return _section(request, "pestwatch/inputs/list.html", "inputs", counties=counties, county=county, groups=groups,
-                    uploads=uploads, with_models=with_models, data_root=conf.get("DATA_ROOT"))
+                    uploads=uploads, with_models=with_models, data_root=conf.get("DATA_ROOT"),
+                    composites_when=_schedule_text("composites").replace("Every month on ", ""))
 
 
 @perm("add_inputupload")

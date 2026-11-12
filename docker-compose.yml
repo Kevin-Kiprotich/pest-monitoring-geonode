@@ -1,6 +1,9 @@
 x-common-django:
   &default-common-django
   image: ${COMPOSE_PROJECT_NAME}/geonode:${GEONODE_BASE_IMAGE_VERSION}
+  # GeoNode's base images are published for linux/amd64 only; on Apple Silicon
+  # they run under Docker Desktop's emulation. No effect on amd64 hosts.
+  platform: linux/amd64
   restart: unless-stopped
   env_file:
     - .env
@@ -60,8 +63,10 @@ services:
     build:
       context: ./
       dockerfile: docker/pestmodels/Dockerfile
-      args:
-        - BASE_IMAGE=${COMPOSE_PROJECT_NAME}/geonode:${GEONODE_BASE_IMAGE_VERSION}
+      # Build on top of the django service's image. Compose builds django first and
+      # hands its result to this build directly, so nothing is pulled from Docker Hub.
+      additional_contexts:
+        geonode-base: service:django
     image: ${COMPOSE_PROJECT_NAME}/pestmodels:${GEONODE_BASE_IMAGE_VERSION}
     container_name: pestmodels4${COMPOSE_PROJECT_NAME}
     environment:
@@ -91,6 +96,7 @@ services:
   # Nginx serving django static/media and proxies to django/geonode
   nginx:
     image: ${COMPOSE_PROJECT_NAME}/nginx:${NGINX_BASE_IMAGE_VERSION}
+    platform: linux/amd64  # base image is amd64-only
     build:
       context: ./docker/nginx
       dockerfile: Dockerfile
@@ -119,6 +125,7 @@ services:
   # Gets and installs letsencrypt certificates
   letsencrypt:
     image: ${COMPOSE_PROJECT_NAME}/letsencrypt:${LETSENCRYPT_BASE_IMAGE_VERSION}
+    platform: linux/amd64  # base image is amd64-only
     build:
       context: ./docker/letsencrypt
       dockerfile: Dockerfile
@@ -137,6 +144,7 @@ services:
   # Geoserver backend
   geoserver:
     image: ${COMPOSE_PROJECT_NAME}/geoserver:${GEOSERVER_BASE_IMAGE_VERSION}
+    platform: linux/amd64  # base image is amd64-only
     build:
       context: ./docker/geoserver
       dockerfile: Dockerfile
@@ -165,6 +173,7 @@ services:
   # PostGIS database.
   db:
     image: ${COMPOSE_PROJECT_NAME}/postgis:${POSTGRES_BASE_IMAGE_VERSION}
+    platform: linux/amd64  # base image is amd64-only
     build:
       context: ./docker/postgresql
       dockerfile: Dockerfile

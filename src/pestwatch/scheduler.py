@@ -1,7 +1,7 @@
 """Decide when the system starts a pipeline on its own.
 
 Each automatic pipeline has a period (a day for the weather download, an ISO
-week for the nowcast, a month for the forecast) and a time in that period
+week for the nowcast, a month for the composites and the forecast) and a time in that period
 from which it is due (``conf.SCHEDULE``, UTC). Once due:
 
 - nothing happens if a run for the period is queued, running or succeeded;
@@ -20,7 +20,7 @@ from .models import Pipeline, PipelineRun, PipelineSchedule, RunStatus, RunTrigg
 
 logger = logging.getLogger(__name__)
 
-AUTOMATIC = (Pipeline.WEATHER, Pipeline.NOWCAST, Pipeline.FORECAST)
+AUTOMATIC = (Pipeline.WEATHER, Pipeline.COMPOSITES, Pipeline.NOWCAST, Pipeline.FORECAST)
 
 
 def period_key(pipeline, now):

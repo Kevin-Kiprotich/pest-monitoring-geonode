@@ -1,8 +1,11 @@
-"""Model inputs that no download produces, which managers upload.
+"""Model inputs that managers upload.
 
 - static layers per county: DEM, soil, crop mask and crop type (once);
 - monthly satellite composites per county: vegetation indices, Sentinel-2 and
-  Landsat stacks (every month; the zips contain no script that makes them);
+  Landsat stacks. These are also fetched from Earth Engine every month by the
+  "Satellite composites" pipeline (``pipeline/composites.py``); an upload is
+  still possible, e.g. for the modelling team's history or a month Earth Engine
+  could not make, and an uploaded file is never replaced by the automatic fetch;
 - trained pest models (.joblib) per county;
 - pest incidence records (.csv), only used to retrain the pest models.
 
@@ -20,6 +23,7 @@ from dataclasses import dataclass, field
 from osgeo import gdal
 
 from . import conf
+from .pipeline.composites import EE_SOURCE, PRODUCT_KEYS, SOURCE_TAG, UPLOAD_SOURCE
 from .pipeline.layout import INDICES, PEST_ORDER, Layout, month_in_name, month_range
 
 gdal.UseExceptions()
@@ -49,6 +53,11 @@ class InputDataset:
     @property
     def monthly(self):
         return self.group == "monthly"
+
+    @property
+    def automatic(self):
+        """Also fetched from Earth Engine by the Satellite composites pipeline."""
+        return self.key in PRODUCT_KEYS
 
     def path(self, L, county, year=None, month=None):
         k = self.key
@@ -123,7 +132,8 @@ def _catalogue():
 
 
 DATASETS = _catalogue()
-GROUPS = [("static", "Static layers (upload once)"), ("monthly", "Monthly satellite composites (upload every month)"),
+GROUPS = [("static", "Static layers (upload once)"),
+          ("monthly", "Monthly satellite composites (fetched from Earth Engine every month, or uploaded)"),
           ("model", "Trained pest models"), ("incidence", "Pest incidence records (training only)")]
 
 
@@ -166,6 +176,7 @@ def status(county, today):
                                  + (f"; {len(gaps)} missing" if gaps else ""))
                 row["latest"] = f"{months[-1][0]}-{months[-1][1]:02d}"
                 row["gaps"] = [f"{y}-{m:02d}" for y, m in gaps[-12:]]
+                row["latest_source"] = source_label(file_source(ds.path(L, county, *months[-1])))
             else:
                 row["detail"] = "none"
         else:
@@ -220,7 +231,33 @@ def _check_joblib(path):
         raise InputError("This does not look like a joblib model file.")
 
 
-def _write(tmp, target):
+def file_source(path):
+    """Who made a monthly file: "earthengine", "upload", or "" (copied onto the server, e.g. the team's history)."""
+    try:
+        r = gdal.Open(path)
+        return (r.GetMetadataItem(SOURCE_TAG) or "") if r is not None else ""
+    except RuntimeError:
+        return ""
+
+
+def source_label(source):
+    return {EE_SOURCE: "Earth Engine", UPLOAD_SOURCE: "uploaded"}.get(source, "copied to the server")
+
+
+def _mark_uploaded(path):
+    """Tag an uploaded GeoTIFF, so the automatic Earth Engine fetch never replaces it."""
+    r = gdal.Open(path, gdal.GA_Update)
+    r.SetMetadataItem(SOURCE_TAG, UPLOAD_SOURCE)
+    r.FlushCache()
+    r = None
+
+
+def _write(tmp, target, ds=None):
+    if ds is not None and ds.monthly and tmp.lower().endswith(".tif"):
+        try:
+            _mark_uploaded(tmp)
+        except Exception:      # only a label: untagged files are never replaced by the fetch either
+            pass
     os.makedirs(os.path.dirname(target), exist_ok=True)
     os.replace(tmp, target)
 
@@ -258,7 +295,7 @@ def save_upload(ds, county, month, uploaded):
         else:
             target = ds.path(L, county)
         _validate(ds, tmp)
-        _write(tmp, target)
+        _write(tmp, target, ds)
         return [target], []
     finally:
         if os.path.exists(tmp):
@@ -291,7 +328,7 @@ def _save_zip(ds, county, zpath, tmp_dir, L):
             try:
                 _validate(ds, tmp)
                 target = ds.path(L, county, *ym)
-                _write(tmp, target)
+                _write(tmp, target, ds)
                 written.append(target)
             except InputError as e:
                 errors.append(f"{os.path.basename(m.filename)}: {e}")

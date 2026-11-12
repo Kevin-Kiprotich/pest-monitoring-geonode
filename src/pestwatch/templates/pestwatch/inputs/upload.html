@@ -8,7 +8,9 @@
   <p class="text-muted">Used by: {{ ds.used_by }}. {{ ds.notes }}
     {% if ds.monthly %}Upload one month at a time, or a .zip with many months: each file name must contain the year and
     month (e.g. <code>NDVI_Kakamega_2026_10.tif</code>).{% endif %}
-    A file already there for the same county{% if ds.monthly %} and month{% endif %} is replaced.</p>
+    A file already there for the same county{% if ds.monthly %} and month{% endif %} is replaced.
+    {% if ds.automatic %}This dataset is also made in Earth Engine every month; an uploaded month is kept and never
+    replaced by the automatic fetch.{% endif %}</p>
   <form method="post" enctype="multipart/form-data" novalidate>
     {% csrf_token %}
     {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}

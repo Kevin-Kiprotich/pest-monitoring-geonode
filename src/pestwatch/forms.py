@@ -1,3 +1,4 @@
+import datetime as dt
 import os
 import re
 
@@ -286,11 +287,23 @@ class StartRunForm(BootstrapMixin, forms.Form):
     end = forms.DateField(required=False, widget=DateInput(), label="To",
                           help_text="Weather: last day. Nowcast: last map date (one map every 7 days in between).")
     issue = forms.CharField(required=False, widget=MonthInput(), label="Forecast issue month",
-                            help_text="The SEAS5 start month. Its satellite composites for the month before must be uploaded.")
+                            help_text="The SEAS5 start month. Its satellite composites for the month before must be "
+                                      "there (fetched or uploaded).")
+    month_from = forms.CharField(required=False, widget=MonthInput(), label="From month",
+                                 help_text="Blank: the month that just ended, and the months before it that Earth "
+                                           "Engine made (refreshed now that later months exist).")
+    month_to = forms.CharField(required=False, widget=MonthInput(), label="To month")
+    products = forms.MultipleChoiceField(required=False, widget=forms.CheckboxSelectMultiple, label="Datasets",
+                                         help_text="None ticked = all of them.")
+    force = forms.BooleanField(required=False, label="Download again the months already fetched from Earth Engine",
+                               help_text="Files that were uploaded or copied onto the server are never replaced.")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        from .inputs import DATASETS
+        from .pipeline.composites import PRODUCT_KEYS
         self.fields["counties"].choices = _model_county_choices()
+        self.fields["products"].choices = [(k, DATASETS[k].label) for k in PRODUCT_KEYS if k in DATASETS]
         self._bootstrap()
 
     def clean_issue(self):
@@ -298,6 +311,18 @@ class StartRunForm(BootstrapMixin, forms.Form):
         if v and not re.match(r"^\d{4}-\d{2}$", v):
             raise forms.ValidationError("Use the form YYYY-MM.")
         return v
+
+    def _clean_month(self, name):
+        v = self.cleaned_data.get(name) or ""
+        if v and not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", v):
+            raise forms.ValidationError("Use the form YYYY-MM.")
+        return v
+
+    def clean_month_from(self):
+        return self._clean_month("month_from")
+
+    def clean_month_to(self):
+        return self._clean_month("month_to")
 
     def clean(self):
         data = super().clean()
@@ -308,6 +333,14 @@ class StartRunForm(BootstrapMixin, forms.Form):
             self.add_error("start", "Give the period to download.")
         if p == Pipeline.FORECAST and not data.get("issue"):
             self.add_error("issue", "Choose the issue month.")
+        if p == Pipeline.COMPOSITES:
+            first, last = data.get("month_from"), data.get("month_to")
+            if first and last and first > last:
+                self.add_error("month_to", "The last month is before the first.")
+            last_complete = f"{(dt.date.today().replace(day=1) - dt.timedelta(days=1)):%Y-%m}"
+            if (last or first or "") > last_complete:
+                self.add_error("month_to" if last else "month_from",
+                               f"Only months that are over can be composited (up to {last_complete}).")
         return data
 
     def params(self):
@@ -329,6 +362,15 @@ class StartRunForm(BootstrapMixin, forms.Form):
                 p["map_dates"] = sorted(dates)
         elif d["pipeline"] == Pipeline.FORECAST:
             p["issue"] = d["issue"]
+        elif d["pipeline"] == Pipeline.COMPOSITES:
+            from .pipeline.composites import month_span
+            first, last = d.get("month_from"), d.get("month_to")
+            if first or last:
+                p.update(months=month_span(first or last, last or first), refresh=[])
+            if d.get("products"):
+                p["products"] = list(d["products"])
+            if d.get("force"):
+                p["force"] = True
         return p
 
 
