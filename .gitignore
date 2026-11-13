@@ -74,3 +74,7 @@ Vagrantfile
 # PestWatch model secrets (Earth Engine key)
 secrets/*
 !secrets/README.txt
+
+
+# Ignore docs
+docs/

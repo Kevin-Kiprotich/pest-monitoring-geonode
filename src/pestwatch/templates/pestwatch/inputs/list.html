@@ -19,7 +19,7 @@
   <strong>{{ fetch_from }}</strong> (weather days, satellite composite months, SEAS5 archive years) is the modelling team's
   history and is uploaded here. From {{ fetch_from }} on, the system downloads what Google Earth Engine and the Copernicus
   CDS provide: the daily weather, the monthly satellite composites (with the modelling team's recipes) and the SEAS5
-  forecast. Static layers, pest models and incidence records are always uploaded. A composite month can still be uploaded
+  forecast. Static layers, pest models, the LSTM model and incidence records are always uploaded. A composite month can still be uploaded
   (e.g. one Earth Engine could not make); an uploaded file is never replaced by the automatic fetch. Each file is checked
   and stored where the models read it. Large archives (e.g. years of daily weather) can also be copied into
   <code>{{ data_root }}</code> on the server in the same folder layout; those are kept as well.</p>
@@ -31,7 +31,7 @@
 <h3>{{ g.title }}</h3>
 <div class="table-responsive">
 <table class="table pw-table pw-input-table">
-  <thead><tr><th>Dataset</th><th>Used by</th><th>Needed for</th><th>How it arrives</th><th>{% if g.key == 'seas5' %}All counties{% else %}{{ county.name }}{% endif %}</th><th class="text-right"></th></tr></thead>
+  <thead><tr><th>Dataset</th><th>Used by</th><th>Needed for</th><th>How it arrives</th><th>{% if g.key == 'seas5' or g.key == 'lstm' %}All counties{% else %}{{ county.name }}{% endif %}</th><th class="text-right"></th></tr></thead>
   <tbody>
   {% for r in g.rows %}
     <tr>
@@ -62,7 +62,7 @@
 {% if uploads %}
 <div class="table-responsive">
 <table class="table pw-table">
-  <thead><tr><th>Dataset</th><th>County</th><th>Month</th><th>File</th><th>By</th><th>When</th></tr></thead>
+  <thead><tr><th>Dataset</th><th>County</th><th>Month / day</th><th>File</th><th>By</th><th>When</th></tr></thead>
   <tbody>
   {% for u in uploads %}
     <tr><td>{{ u.dataset }}</td><td>{{ u.county|default:"—" }}</td><td>{{ u.month|default:"—" }}</td>

@@ -393,6 +393,9 @@ class InputUploadForm(BootstrapMixin, forms.Form):
     month = forms.CharField(required=False, widget=MonthInput(),
                             help_text="Monthly datasets: the month the composite is for. Leave blank for a .zip "
                                       "of several months (each file name must contain YYYY_MM).")
+    day = forms.DateField(required=False, widget=DateInput(),
+                          help_text="The day this file is for. Required for a single file; leave blank for a .zip "
+                                    "of several days (each file name must contain its day, e.g. YYYY_MM_DD).")
     file = forms.FileField()
 
     def __init__(self, dataset, *args, **kwargs):
@@ -401,8 +404,10 @@ class InputUploadForm(BootstrapMixin, forms.Form):
         self.fields["county"].queryset = counties()
         self.fields["file"].widget.attrs["accept"] = ",".join(dataset.ext)
         self.fields["file"].help_text = f"{' or '.join(dataset.ext)}. {dataset.notes}"
-        if dataset.regional:
+        if dataset.shared:
             del self.fields["county"]
+        if not dataset.daily:
+            del self.fields["day"]
         if not dataset.by_month:
             del self.fields["month"]
         elif dataset.regional:
@@ -418,3 +423,19 @@ class InputUploadForm(BootstrapMixin, forms.Form):
         if not re.match(r"^\d{4}-\d{2}$", v):
             raise forms.ValidationError("Use the form YYYY-MM.")
         return int(v[:4]), int(v[5:7])
+
+    def clean(self):
+        data = super().clean()
+        f = data.get("file")
+        if self.dataset.daily and f is not None:
+            is_zip = f.name.lower().endswith(".zip")
+            if not is_zip and not data.get("day"):
+                self.add_error("day", "Enter the day this file is for.")
+            elif is_zip and data.get("day"):
+                self.add_error("day", "Leave the day blank for a .zip: each file inside is saved for the day in its name.")
+        return data
+
+    @property
+    def when(self):
+        """The month (monthly / archive files) or the day (daily files) to save the upload for, or None."""
+        return self.cleaned_data.get("month") or self.cleaned_data.get("day")

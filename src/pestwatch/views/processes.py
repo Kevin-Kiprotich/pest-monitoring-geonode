@@ -168,18 +168,23 @@ def input_upload(request, key):
     if request.method == "POST" and form.is_valid():
         county, f = form.cleaned_data.get("county"), form.cleaned_data["file"]
         try:
-            written, skipped = inputs.save_upload(ds, county.name if county else "", form.cleaned_data.get("month"), f)
+            written, skipped = inputs.save_upload(ds, county.name if county else "", form.when, f)
         except inputs.InputError as e:
             form.add_error("file", str(e))
         except Exception as e:
             logger.exception("Saving %s failed", key)
             form.add_error("file", f"The file could not be saved: {e}")
         else:
-            month = form.cleaned_data.get("month")
-            InputUpload.objects.create(dataset=key, county=county, month=f"{month[0]}-{month[1]:02d}" if month else "",
+            when = form.when
+            when = "" if not when else when.isoformat() if hasattr(when, "isoformat") else f"{when[0]}-{when[1]:02d}"
+            InputUpload.objects.create(dataset=key, county=county, month=when,
                                        filename=f.name, size=f.size, files_written=len(written), uploaded_by=request.user)
             where = f", {county.name}" if county else ""
+            where += f", {when}" if when else ""
             messages.success(request, f"Saved {len(written)} file{'s' if len(written) != 1 else ''} for {ds.label}{where}.")
+            if key == "lstm_model":
+                messages.info(request, "The next forecast run uses this model: "
+                                       + inputs.describe_lstm(inputs.lstm_summary(written[0])) + ".")
             if skipped:
                 messages.warning(request, "Skipped: " + "; ".join(skipped[:10]))
             chosen = county.pk if county else request.GET.get("county", "")

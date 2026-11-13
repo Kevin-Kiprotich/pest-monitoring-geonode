@@ -350,7 +350,7 @@ def _lstm_cfg(L):
     """The stored model's settings (counties, months, ...), read from final_model.pt."""
     import torch
     if not os.path.exists(L.lstm_model):
-        raise RuntimeError(f"No LSTM model at {L.lstm_model}: put the trained final_model.pt there.")
+        raise RuntimeError(f"No LSTM model at {L.lstm_model}: upload final_model.pt under Input data > LSTM model.")
     return torch.load(L.lstm_model, map_location="cpu", weights_only=False)["cfg"]
 
 
@@ -427,7 +427,7 @@ def lstm_forecast(spec, L):
         COUNTIES_TO_RUN=counties, FORCE_RECOMPUTE=False, DELETE_TILE_CACHE=False))
     tiffs = glob.glob(os.path.join(L.lstm_geotiff(spec["issue"]), "mean", "*", "*.tif"))
     if not tiffs:
-        raise RuntimeError(f"Notebook C wrote no GeoTIFFs to {L.lstm_geotiff(spec['issue'])}")
+        raise RuntimeError(f"The LSTM forecast wrote no GeoTIFFs to {L.lstm_geotiff(spec['issue'])}")
     if spec.get("clean_tile_cache", True):
         shutil.rmtree(os.path.join(out, "tile_cache"), ignore_errors=True)
     return dict(geotiffs=len(tiffs), folder=L.lstm_geotiff(spec["issue"]))

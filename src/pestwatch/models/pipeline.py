@@ -131,7 +131,7 @@ class InputUpload(TimeStampedModel):
     """A file a manager uploaded into the model data store (static layer, monthly composite, model...)."""
     dataset = models.CharField(max_length=40, db_index=True)
     county = models.ForeignKey("pestwatch.AdminBoundary", on_delete=models.SET_NULL, null=True, blank=True)
-    month = models.CharField(max_length=7, blank=True)
+    month = models.CharField(max_length=10, blank=True, help_text="YYYY-MM, or YYYY-MM-DD for a daily file")
     filename = models.CharField(max_length=255)
     size = models.BigIntegerField(default=0)
     files_written = models.PositiveIntegerField(default=1)

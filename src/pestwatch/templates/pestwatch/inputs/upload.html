@@ -7,11 +7,13 @@
   <h2>Upload: {{ ds.label }}</h2>
   <p class="text-muted">Used by: {{ ds.used_by }}. {{ ds.notes }}
     {% if ds.monthly %}Upload one month at a time, or a .zip with many months: each file name must contain the year and
-    month (e.g. <code>NDVI_Kakamega_2026_10.tif</code>).{% elif ds.daily %}Upload a .zip with many days (or one day at a
-    time): each file name must contain the day (e.g. <code>CHIRPS_Kakamega_2023_03_04.tif</code>).{% elif ds.regional %}Upload
+    month (e.g. <code>NDVI_Kakamega_2026_10.tif</code>).{% elif ds.daily %}Upload one day at a time and enter its date, or a .zip with
+    many days: each file name in the zip must contain its day (e.g. <code>CHIRPS_Kakamega_2023_03_04.tif</code>).{% elif ds.regional %}Upload
     one file at a time, or a .zip of many: each file name must contain the year and start month
     (<code>SEAS5_daily_2021-11.nc</code>).{% endif %}
-    A file already there for the same {% if ds.regional %}start month{% else %}county{% if ds.monthly %} and month{% elif ds.daily %} and day{% endif %}{% endif %} is replaced.
+    {% if ds.group == 'lstm' %}The file is checked (it must be a trained LSTM model holding the settings the forecast
+    reads) and replaces the current one for all counties.{% else %}A file already there for the same
+    {% if ds.regional %}start month{% else %}county{% if ds.monthly %} and month{% elif ds.daily %} and day{% endif %}{% endif %} is replaced.{% endif %}
     {% if ds.downloaded %}{{ ds.arrives }}{% endif %}
     {% if ds.automatic %}An uploaded month is kept and never replaced by the automatic fetch.{% endif %}</p>
   <form method="post" enctype="multipart/form-data" novalidate>
@@ -21,6 +23,7 @@
       <div class="row">
         {% if form.county %}<div class="col-sm-6">{% include "pestwatch/_field.html" with field=form.county %}</div>{% endif %}
         {% if form.month %}<div class="col-sm-6">{% include "pestwatch/_field.html" with field=form.month %}</div>{% endif %}
+        {% if form.day %}<div class="col-sm-6">{% include "pestwatch/_field.html" with field=form.day %}</div>{% endif %}
       </div>
       {% include "pestwatch/_field.html" with field=form.file %}
     </fieldset>

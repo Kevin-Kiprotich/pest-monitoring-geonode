@@ -5,6 +5,7 @@ import datetime as dt
 import io
 import json
 import os
+import pickle
 import shutil
 import tempfile
 import zipfile
@@ -358,8 +359,72 @@ class HistoryUploadTests(SimpleTestCase):
         written, _ = inputs.save_upload(inputs.DATASETS["wx_rh"], "Kakamega", None,
                                         SimpleUploadedFile("Kakamega_RH_2026-10-01.tif", tif))
         self.assertEqual(written, [os.path.join(L.wx_dir("rh", "Kakamega"), "Kakamega_RH_2026-10-01.tif")])
-        with self.assertRaisesRegex(inputs.InputError, "Put the day"):
+        # wind is a 4-band file (speed, u, v, direction): a single-band one is refused
+        self.assertEqual(inputs.DATASETS["wx_wind"].bands, (4, 4))
+        with self.assertRaisesRegex(inputs.InputError, "should have 4 band"):
+            inputs.save_upload(inputs.DATASETS["wx_wind"], "Kakamega", dt.date(2026, 10, 1),
+                               SimpleUploadedFile("wind.tif", tif))
+        with self.assertRaisesRegex(inputs.InputError, "Enter the day"):
             inputs.save_upload(inputs.DATASETS["wx_rh"], "Kakamega", None, SimpleUploadedFile("rh.tif", tif))
+        # one day: the date the manager entered wins over the name
+        written, _ = inputs.save_upload(inputs.DATASETS["wx_rh"], "Kakamega", dt.date(2026, 9, 30),
+                                        SimpleUploadedFile("rh.tif", tif))
+        self.assertEqual(written, [os.path.join(L.wx_dir("rh", "Kakamega"), "Kakamega_RH_2026-09-30.tif")])
+
+    def test_upload_form_asks_for_the_day_of_a_single_daily_file(self):
+        from pestwatch import inputs
+        from pestwatch.forms import InputUploadForm
+        from pestwatch.models import AdminBoundary
+
+        def form(ds, name, day=""):
+            f = InputUploadForm(ds, {"day": day}, {"file": SimpleUploadedFile(name, b"x")})
+            f.is_valid()           # the county is missing (no database here): only the other fields are checked
+            return f
+
+        with unittest_mock.patch("pestwatch.forms.counties", return_value=AdminBoundary.objects.none()):
+            ds = inputs.DATASETS["wx_precip"]
+            f = form(ds, "a.tif")
+            self.assertNotIn("month", f.fields)
+            self.assertIn("day", f.errors)                                  # a single file needs its day
+            self.assertIn("day", form(ds, "a.zip", "2026-01-02").errors)    # a zip uses the names
+            self.assertNotIn("day", form(ds, "a.zip").errors)
+            f = form(ds, "a.tif", "2026-01-02")
+            self.assertNotIn("day", f.errors)
+            self.assertEqual(f.when, dt.date(2026, 1, 2))
+            self.assertEqual(set(InputUploadForm(inputs.DATASETS["lstm_model"]).fields), {"file"})
+
+    def test_lstm_model_upload(self):
+        from pestwatch import inputs
+        ds = inputs.DATASETS["lstm_model"]
+        self.assertTrue(ds.shared and not ds.regional and not ds.by_month and not ds.daily)
+        L = lay.Layout(self.root)
+        rows = {r["ds"].key: r for r in inputs.status("Kakamega", dt.date(2026, 11, 12))}
+        self.assertEqual(rows["lstm_model"]["detail"], "missing")
+        good = fake_torch_save(lstm_artefact())
+        written, _ = inputs.save_upload(ds, "", None, SimpleUploadedFile("final_model.pt", good))
+        self.assertEqual(written, [L.lstm_model])
+        info = inputs.lstm_summary(L.lstm_model)
+        self.assertEqual(info["counties"], ["Kakamega", "Kilifi", "Nyeri"])
+        self.assertEqual(info["months"], ("2019-01", "2024-12"))
+        self.assertEqual(info["seeds"], 2)
+        rows = {r["ds"].key: r for r in inputs.status("Nyeri", dt.date(2026, 11, 12))}
+        self.assertTrue(rows["lstm_model"]["ok"])
+        self.assertIn("counties Kakamega, Kilifi, Nyeri", rows["lstm_model"]["detail"])
+        # the legacy (non-zip) torch.save format is read too
+        legacy = b"".join(pickle.dumps(x, protocol=2) for x in (inputs._TORCH_LEGACY_MAGIC, 1001, {}, lstm_artefact()))
+        self.assertEqual(inputs.save_upload(ds, "", None, SimpleUploadedFile("m.pt", legacy))[0], [L.lstm_model])
+        art = lstm_artefact()
+        del art["cfg"]["MONTHS"]
+        with self.assertRaisesRegex(inputs.InputError, "lack MONTHS"):
+            inputs.save_upload(ds, "", None, SimpleUploadedFile("m.pt", fake_torch_save(art)))
+        with self.assertRaisesRegex(inputs.InputError, "not a trained LSTM"):
+            inputs.save_upload(ds, "", None, SimpleUploadedFile("m.pt", fake_torch_save({"weights": 1})))
+        with self.assertRaisesRegex(inputs.InputError, "PyTorch"):
+            inputs.save_upload(ds, "", None, SimpleUploadedFile("m.pt", b"hello"))
+        with self.assertRaisesRegex(inputs.InputError, "must be a .pt"):
+            inputs.save_upload(ds, "", None, SimpleUploadedFile("m.joblib", good))
+        self.assertEqual(inputs.lstm_summary(L.lstm_model)["seeds"], 2)       # failed uploads left the model alone
+        self.assertNotIn("lstm_skill", inputs.DATASETS)                     # the skill table is not uploaded
 
     def test_seas5_archive_upload_and_history_needed(self):
         from pestwatch import inputs
@@ -386,6 +451,45 @@ class HistoryUploadTests(SimpleTestCase):
             seas5.fetch(L, ["Kakamega"], L.boundaries, "2026-12", [2024, 2025, 2026], dt.date(2026, 11, 1))
         with self.assertRaisesRegex(RuntimeError, "is history"):
             seas5.fetch(L, ["Kakamega"], L.boundaries, "2026-10", [2024, 2025, 2026], dt.date(2026, 11, 1))
+
+
+class FakeTensor:
+    """Pickled like a torch tensor: a global the restricted unpickler must not import."""
+    def __reduce__(self):
+        return (FakeTensor, ())
+
+
+class FakeStorage:
+    pass
+
+
+class _TorchLikePickler(pickle.Pickler):
+    """Writes storages as persistent ids, as torch.save does."""
+    def persistent_id(self, obj):
+        return ("storage", "FloatStorage", "0", "cpu", 4) if isinstance(obj, FakeStorage) else None
+
+
+def lstm_artefact():
+    from collections import OrderedDict
+    cfg = dict(L=12, H=7, K=18, VIS=["NDVI", "NDMI"], WXN=["tmax"], STN=["dem"], COUNTIES=["Kakamega", "Kilifi", "Nyeri"],
+               MONTHS=[f"{y}-{m:02d}" for y in range(2019, 2025) for m in range(1, 13)], PRIMARY="NDVI",
+               MIN_ENC_USABLE=6, HIDDEN=64, LAYERS=2, STATIC_EMB=8, DROPOUT=0.1, n_static=5, K_SHRINK=0.5,
+               ELEV_BINS=np.array([0.0, 500.0, 1000.0]), SMOOTH_CLIM=True, Z_CLIP=4.0, QA_SOURCE="qa",
+               clim_end="2024-12", epochs=40, trained="2026-11-01 10:00")
+    state = OrderedDict(w=FakeTensor(), s=FakeStorage())
+    return dict(cfg=cfg, norm=dict(an_sd=np.ones(3, "float32"), edges=[np.arange(3)]), states=[state, state])
+
+
+def fake_torch_save(obj):
+    """The zip layout of torch.save (archive/data.pkl, archive/data/0, archive/version), without torch."""
+    pkl = io.BytesIO()
+    _TorchLikePickler(pkl, protocol=2).dump(obj)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("archive/data.pkl", pkl.getvalue())
+        z.writestr("archive/data/0", b"\0" * 16)
+        z.writestr("archive/version", b"3\n")
+    return buf.getvalue()
 
 
 def fake_run(status, attempts=1, finished=None, pk=1, message="boom"):

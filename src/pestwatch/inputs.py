@@ -16,17 +16,22 @@ or the Copernicus CDS can provide is downloaded by the pipelines.
   start month, for the whole area). History: uploaded. From AUTO_FETCH_FROM: each
   forecast run adds its own start month from the CDS;
 - trained pest models (.joblib) per county (upload only);
+- the trained LSTM vegetation forecast (final_model.pt, one for all its counties; upload
+  only, the forecast never retrains it);
 - pest incidence records (.csv), only used to retrain the pest models (upload only).
 
 Each file is checked and written to the exact path the notebooks read
 (``pipeline/layout.py``). Monthly, daily and archive datasets also accept a .zip of
-many files, each named with its month or day.
+many files, each named with its month or day; a single daily file is saved for the
+day the manager enters.
 """
 import csv
 import datetime as dt
 import glob
+import functools
 import io
 import os
+import pickle
 import re
 import uuid
 import zipfile
@@ -52,7 +57,7 @@ class InputError(ValueError):
 class InputDataset:
     key: str
     label: str
-    group: str            # static | monthly | weather | seas5 | model | incidence
+    group: str            # static | monthly | weather | seas5 | model | lstm | incidence
     ext: tuple
     used_by: str
     needed_for: str       # nowcast, forecast, training
@@ -75,6 +80,11 @@ class InputDataset:
     def regional(self):
         """One file set for the whole area, not per county (the SEAS5 archive)."""
         return self.group == "seas5"
+
+    @property
+    def shared(self):
+        """Not per county: the SEAS5 archive and the LSTM, which covers all its counties in one file."""
+        return self.group in ("seas5", "lstm")
 
     @property
     def by_month(self):
@@ -116,6 +126,8 @@ class InputDataset:
             return L.crop("CropType", county, conf.get("CROP_SEASON"))
         if k.startswith("model_"):
             return L.pest_model(self.pest, county)
+        if k == "lstm_model":
+            return L.lstm_model
         if k.startswith("incidence_"):
             return L.incidence(self.pest, county)
         if k.startswith("index_"):
@@ -174,11 +186,18 @@ def _catalogue():
                      bands=(3, 8), notes="Bands COASTAL, BLUE, LST_K (Kelvin), 30 m."),
     ]
     for var, label, src in WEATHER:
+        # Wind is one 4-band file per day (speed, u, v, direction): the pest models use all four;
+        # the bias correction and the LSTM read band 1 (speed). The other variables have one band.
+        wind = var == "wind"
+        bands = ("4 bands: 1 = wind speed (m/s), 2 = u (east-west) component, 3 = v (north-south) component, "
+                 "4 = direction (degrees, 0-360). " if wind else "1 band. ")
         d.append(InputDataset(f"wx_{var}", f"{label} (daily history)", "weather", (".tif", ".zip"),
                               "Pest models (observed weather), SEAS5 bias correction, the LSTM", "nowcast, forecast",
-                              var=var, notes=f"One GeoTIFF per day ({src}), the day in the file name, e.g. "
-                                             f"{Layout.wx_name(var, 'Kakamega', dt.date(2023, 3, 4))}. "
-                                             "A .zip of many days is easiest."))
+                              bands=(4, 4) if wind else (1, 1),
+                              var=var, notes=f"One GeoTIFF per day ({src}), {bands}For a single file, enter its day when "
+                                             "uploading. A .zip of many days is easiest: each file name in it must "
+                                             "contain its day, e.g. "
+                                             f"{Layout.wx_name(var, 'Kakamega', dt.date(2023, 3, 4))}."))
     d.append(InputDataset("seas5_archive", "SEAS5 archive of past forecasts", "seas5", (".nc", ".zip"),
                           "Bias correction of the SEAS5 forecast", "forecast",
                           notes="One NetCDF per year and start month, SEAS5_daily_<YYYY-MM>.nc, with temp_c, rh_pct "
@@ -188,8 +207,17 @@ def _catalogue():
     for p in PEST_ORDER:
         d.append(InputDataset(f"model_{p}", f"{PEST_NAMES[p]} model ({p}_model.joblib)", "model", (".joblib",),
                               "Pest risk prediction", "nowcast, forecast", pest=p,
-                              notes="Saved by the pest notebook (models/<PEST>_model.joblib). Models are county-specific."
+                              notes="The trained risk model of this pest for this county, a .joblib file named <PEST>_model.joblib. "
+                                    "Each county has its own models."
                                     + (" MLND needs the APHIDS, FAW, THRIPS and STEMBORER models of the same county." if p == "MLND" else "")))
+    d.append(InputDataset(
+        "lstm_model", "LSTM vegetation forecast model (final_model.pt)", "lstm", (".pt",),
+        "Vegetation index forecast, which feeds the pest forecast", "forecast",
+        notes="The trained neural network that predicts the satellite vegetation indices and bands of the next "
+              "7 months from the past months and the weather forecast. A PyTorch file holding the model's settings "
+              "(counties, training months, sizes), its normalisation values and its trained weights. One model covers "
+              "all the counties it was trained on; it is used as is and never retrained. Uploading a new one "
+              "replaces the current model from the next forecast run."))
     for p in PEST_ORDER:
         d.append(InputDataset(f"incidence_{p}", f"{PEST_NAMES[p]} incidence records", "incidence", (".csv",),
                               "Retraining the pest models only", "training", pest=p,
@@ -203,7 +231,8 @@ GROUPS = [("static", "Static layers (upload once)"),
           ("monthly", "Monthly satellite composites (history uploaded; new months from Earth Engine)"),
           ("weather", "Observed daily weather (history uploaded; new days from Earth Engine and the CDS)"),
           ("seas5", "SEAS5 archive, all counties (history uploaded; new start months from the CDS)"),
-          ("model", "Trained pest models"), ("incidence", "Pest incidence records (training only)")]
+          ("model", "Trained pest models"),
+          ("lstm", "Trained LSTM vegetation forecast (all counties, one model)"), ("incidence", "Pest incidence records (training only)")]
 
 
 def fetch_from():
@@ -292,6 +321,21 @@ def _seas5_row(row, L, first_fetch):
     row["gaps"] = [f"{y}-{m:02d}" for y, m in missing[:12]]
 
 
+def _lstm_row(row, L):
+    p = L.lstm_model
+    if not os.path.exists(p):
+        row["detail"] = "missing"
+        return
+    row["mtime"] = os.path.getmtime(p)
+    try:
+        info = lstm_summary(p)
+    except InputError as e:
+        row["detail"] = f"{os.path.getsize(p) / 1e6:.1f} MB; unreadable: {e}"
+        return
+    row["ok"] = True
+    row["detail"] = f"{os.path.getsize(p) / 1e6:.1f} MB; {describe_lstm(info)}"
+
+
 def status(county, today):
     """One row per dataset for ``county``: what is there and what is missing."""
     L = layout()
@@ -306,6 +350,8 @@ def status(county, today):
             _daily_row(row, ds, L, county, today, first_fetch)
         elif ds.regional:
             _seas5_row(row, L, first_fetch)
+        elif ds.key == "lstm_model":
+            _lstm_row(row, L)
         else:
             p = ds.path(L, county)
             if os.path.exists(p):
@@ -356,6 +402,120 @@ def _check_joblib(path):
     if not head or not (head[:1] == b"\x80" or head[:2] in (b"x\x9c", b"\x1f\x8b", b"BZ") or head[:4] in
                         (b"\xfd7zX", b"\x04\x22\x4d\x18") or head[:2] == b"ZF"):
         raise InputError("This does not look like a joblib model file.")
+
+
+# --- the LSTM model ----------------------------------------------------------------
+# final_model.pt is a torch.save() of dict(cfg=..., norm=..., states=[state_dict per seed]).
+# GeoNode's Python has no torch, so the file is read with a restricted unpickler: only plain
+# Python and numpy types are rebuilt, every other object (torch tensors, storages) becomes a
+# stub and no other code can run. That is enough to check the settings the forecast reads.
+
+LSTM_CFG_KEYS = ("L", "H", "K", "VIS", "WXN", "STN", "COUNTIES", "MONTHS", "PRIMARY", "MIN_ENC_USABLE", "HIDDEN",
+                 "LAYERS", "STATIC_EMB", "DROPOUT", "n_static", "K_SHRINK", "ELEV_BINS", "SMOOTH_CLIM", "Z_CLIP",
+                 "QA_SOURCE", "clim_end", "epochs", "trained")
+_TORCH_LEGACY_MAGIC = 0x1950a86a20f9469cfc6c
+_SAFE_GLOBALS = {("builtins", n) for n in ("dict", "list", "tuple", "set", "frozenset", "int", "float", "complex",
+                                             "str", "bytes", "bytearray", "bool", "slice", "range")} | \
+    {("collections", "OrderedDict"), ("_codecs", "encode")}
+# numpy arrays and scalars in cfg / norm (numpy.core.multiarray in numpy 1, numpy._core.multiarray in numpy 2)
+_NUMPY_GLOBALS = {("multiarray", "_reconstruct"), ("multiarray", "scalar"), ("numpy", "dtype"), ("numpy", "ndarray")}
+
+
+class _Stub:
+    """Stands in for any object that is not plain Python or numpy (torch tensors, storages, dtypes)."""
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __call__(self, *args, **kwargs):
+        return _Stub()
+
+    def __setstate__(self, state):
+        pass
+
+    def __setitem__(self, key, value):
+        pass
+
+
+class _SettingsUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if (module, name) in _SAFE_GLOBALS:
+            return super().find_class(module, name)
+        if module.split(".")[0] == "numpy" and (module.rsplit(".", 1)[-1], name) in _NUMPY_GLOBALS:
+            import numpy
+            if module.startswith("numpy._core") and not hasattr(numpy, "_core"):
+                module = "numpy.core" + module[len("numpy._core"):]      # a numpy 2 pickle read by numpy 1
+            return super().find_class(module, name)
+        return _Stub
+
+    def persistent_load(self, pid):
+        return _Stub()
+
+
+def _unpickle_settings(f):
+    try:
+        return _SettingsUnpickler(f).load()
+    except Exception as e:
+        raise InputError(f"The model file could not be read ({type(e).__name__}: {e}).")
+
+
+def _load_lstm_artefact(path):
+    with open(path, "rb") as f:
+        head = f.read(4)
+    if head[:2] == b"PK":                                   # torch >= 1.6: a zip holding <name>/data.pkl
+        try:
+            with zipfile.ZipFile(path) as z:
+                pkl = [n for n in z.namelist() if n == "data.pkl" or n.endswith("/data.pkl")]
+                if not pkl:
+                    raise InputError("This zip is not a PyTorch file (no data.pkl inside).")
+                with z.open(min(pkl, key=len)) as f:
+                    return _unpickle_settings(f)
+        except zipfile.BadZipFile:
+            raise InputError("The model file is a damaged zip.")
+    if head[:1] == b"\x80":                                 # legacy torch.save: magic, protocol, sys info, object
+        with open(path, "rb") as f:
+            if _unpickle_settings(f) != _TORCH_LEGACY_MAGIC:
+                raise InputError("This pickle is not a PyTorch file.")
+            _unpickle_settings(f)
+            _unpickle_settings(f)
+            return _unpickle_settings(f)
+    raise InputError("This does not look like a PyTorch model file (torch.save).")
+
+
+def check_lstm(path):
+    """The settings of a stored LSTM, checked against what the forecast notebook reads."""
+    art = _load_lstm_artefact(path)
+    if not isinstance(art, dict) or not all(k in art for k in ("cfg", "norm", "states")):
+        raise InputError("This is not a trained LSTM vegetation forecast model: it should hold the model's settings "
+                         "(cfg), normalisation values (norm) and trained weights (states).")
+    cfg = art["cfg"]
+    missing = [k for k in LSTM_CFG_KEYS if not isinstance(cfg, dict) or k not in cfg]
+    if missing:
+        raise InputError(f"The model's settings (cfg) lack {', '.join(missing)}.")
+    try:
+        counties, months = [str(c) for c in cfg["COUNTIES"]], [str(m) for m in cfg["MONTHS"]]
+        indices, seeds = [str(v) for v in cfg["VIS"]], len(art["states"])
+    except TypeError:
+        raise InputError("The model's COUNTIES, MONTHS, VIS or states are not lists.")
+    if not counties or not months or not seeds:
+        raise InputError("The model has no counties, no training months or no trained weights.")
+    return dict(counties=counties, months=(months[0], months[-1]), clim_end=str(cfg["clim_end"]),
+                trained=str(cfg["trained"]), seeds=seeds, indices=indices)
+
+
+@functools.lru_cache(maxsize=4)
+def _lstm_summary_cached(path, mtime, size):
+    return check_lstm(path)
+
+
+def lstm_summary(path):
+    """check_lstm(), cached while the file is unchanged (the Input data page shows it on every view)."""
+    st = os.stat(path)
+    return _lstm_summary_cached(path, st.st_mtime, st.st_size)
+
+
+def describe_lstm(info):
+    return (f"trained {info['trained']} on {info['months'][0]} to {info['months'][1]}, "
+            f"counties {', '.join(info['counties'])}, {info['seeds']} seed{'s' if info['seeds'] != 1 else ''}")
 
 
 SEAS5_VARIABLES = ("temp_c", "rh_pct", "wind_speed")
@@ -412,7 +572,9 @@ def _write(tmp, target, ds=None):
 
 
 def _validate(ds, path):
-    if path.lower().endswith(".tif"):
+    if ds.key == "lstm_model":
+        check_lstm(path)
+    elif path.lower().endswith(".tif"):
         _check_raster(ds, path)
     elif path.lower().endswith(".csv"):
         _check_csv(path)
@@ -435,10 +597,12 @@ NAME_HINT = {"monthly": "YYYY_MM (e.g. NDVI_Kakamega_2026_10.tif)", "seas5": "YY
              "weather": "the day, YYYY_MM_DD, YYYY-MM-DD or YYYYMMDD (e.g. CHIRPS_Kakamega_2023_03_04.tif)"}
 
 
-def save_upload(ds, county, month, uploaded):
+def save_upload(ds, county, when, uploaded):
     """Check ``uploaded`` and write it where the models read it. Returns (paths written, files skipped).
 
-    ``county`` is ignored for regional datasets (the SEAS5 archive)."""
+    ``when`` is the (year, month) of a monthly or archive file, or the date of a daily file; when
+    it is None the month or day is read from the file name. A .zip always uses the names.
+    ``county`` is ignored for datasets that are not per county (the SEAS5 archive, the LSTM)."""
     L = layout()
     name = uploaded.name
     ext = os.path.splitext(name)[1].lower()
@@ -454,9 +618,9 @@ def save_upload(ds, county, month, uploaded):
         if ext == ".zip":
             return _save_zip(ds, county, tmp, tmp_dir, L)
         if ds.by_month or ds.daily:
-            key = (month if ds.by_month else None) or _key_in_name(ds, name)
+            key = when or _key_in_name(ds, name)
             if not key:
-                raise InputError(("Choose the month, or put it" if ds.by_month else "Put the day") +
+                raise InputError(("Choose the month, or put it" if ds.by_month else "Enter the day, or put it") +
                                  f" in the file name: {NAME_HINT[ds.group]}.")
             target = _target(ds, L, county, key)
         else:

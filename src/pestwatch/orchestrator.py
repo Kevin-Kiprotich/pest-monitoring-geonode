@@ -51,10 +51,10 @@ STEP_LABELS = {
     "fetch_seas5": "Download the SEAS5 seasonal forecast (CDS)",
     "bias_correct": "Bias-correct SEAS5 against observed weather",
     "downscale_30m": "Downscale the forecast to 30 m with the DEM",
-    "lstm_dataset": "LSTM A: build the input dataset from the latest months",
-    "lstm_stores": "LSTM A2: build the full-area stores",
-    "lstm_train": "LSTM B: skipped (the stored model is used)",
-    "lstm_forecast": "LSTM C: forecast vegetation indices with the stored model (7 months)",
+    "lstm_dataset": "LSTM: gather the latest months of satellite data and the forecast weather",
+    "lstm_stores": "LSTM: prepare the inputs for the whole area",
+    "lstm_train": "LSTM training: skipped (the stored model is used)",
+    "lstm_forecast": "LSTM: forecast vegetation indices with the stored model (7 months)",
     "pest_nowcast": "Pest models: map current risk",
     "pest_forecast": "Pest models: map forecast risk",
     "pest_train": "Pest models: retrain from incidence records",
@@ -180,7 +180,7 @@ def check_ready(pipeline, params):
         if no_dem:
             problems.append(f"Elevation (DEM) missing for {', '.join(no_dem)}.")
     if pipeline == Pipeline.FORECAST and not os.path.exists(L.lstm_model):
-        problems.append(f"The trained LSTM model is missing: put final_model.pt in {L.lstm_models}.")
+        problems.append("The trained LSTM model is missing: upload final_model.pt under Input data > LSTM model.")
     if pipeline == Pipeline.FORECAST and params.get("issue"):
         y, m = map(int, params["issue"].split("-"))
         if dt.date(y, m, 1) < first:
